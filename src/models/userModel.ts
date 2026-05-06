@@ -7,7 +7,7 @@ export interface IUser extends Document {
   displayName?: string;
   photoURL?: string;
   role: 'User' | 'Travel Agency' | 'Admin';
-  plan: 'Free' | 'Plus';
+  plan: 'Free' | 'Plus' | 'Concierge Pass';
   notificationsEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -21,7 +21,7 @@ const UserSchema: Schema = new Schema(
     displayName: { type: String },
     photoURL: { type: String },
     role: { type: String, enum: ['User', 'Travel Agency', 'Admin'], default: 'User' },
-    plan: { type: String, enum: ['Free', 'Plus'], default: 'Free' },
+    plan: { type: String, enum: ['Free', 'Plus', 'Concierge Pass'], default: 'Free' },
     notificationsEnabled: { type: Boolean, default: true },
   },
   {

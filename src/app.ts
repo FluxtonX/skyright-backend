@@ -12,6 +12,9 @@ import paymentRoutes from './routes/paymentRoutes';
 import searchRoutes from './routes/searchRoutes';
 import plusRoutes from './routes/plusRoutes';
 import guardRoutes from './routes/guardRoutes';
+import expenseRoutes from './routes/expenseRoutes';
+import intelligenceRoutes from './routes/intelligenceRoutes';
+import tripRoutes from './routes/tripRoutes';
 
 dotenv.config();
 
@@ -37,6 +40,9 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/plus', plusRoutes);
 app.use('/api/guard', guardRoutes);
+app.use('/api/expenses', expenseRoutes);
+app.use('/api/intelligence', intelligenceRoutes);
+app.use('/api/trips', tripRoutes);
 
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to SkyRight API' });

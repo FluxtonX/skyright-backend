@@ -204,4 +204,87 @@ Search for cases (claims) and live flight data simultaneously.
   }
 }
 ```
+---
 
+## 💰 Expense Tracker
+### 1. Log Expense
+- **Endpoint:** `POST /api/expenses`
+- **Access:** Private
+- **Body:**
+```json
+{
+  "category": "Hotel",
+  "vendor": "Eko Hotel",
+  "amount": 85000,
+  "date": "2026-04-25",
+  "tags": ["Business", "Lagos"],
+  "status": "Submitted"
+}
+```
+
+### 2. Get Expenses (Filtered)
+- **Endpoint:** `GET /api/expenses?status=Submitted`
+- **Access:** Private
+
+### 3. Get Expense Metrics
+- **Endpoint:** `GET /api/expenses/metrics`
+- **Access:** Private
+- **Response:**
+```json
+{
+  "totalSubmitted": 450000,
+  "approved": 380000,
+  "flaggedCount": 2,
+  "complianceRate": 95
+}
+```
+
+---
+
+## 🧠 Claim Intelligence
+### 1. Global Intelligence
+- **Endpoint:** `GET /api/intelligence/global`
+- **Access:** Private
+
+### 2. Airline Performance
+- **Endpoint:** `GET /api/intelligence/airlines`
+- **Access:** Private
+
+### 3. AI Recommendations
+- **Endpoint:** `GET /api/intelligence/recommendations`
+- **Access:** Private
+
+---
+
+## 🗺️ Trip Visualizer
+### 1. Create Trip
+- **Endpoint:** `POST /api/trips`
+- **Access:** Private
+- **Body:**
+```json
+{
+  "tripName": "Business Trip to London",
+  "origin": "LOS",
+  "destination": "LHR",
+  "totalDuration": "14h 15m",
+  "stops": 1,
+  "timeline": [
+    {
+      "isFlight": true,
+      "title": "EK 785",
+      "subtitle": "Emirates",
+      "route": "Lagos (LOS) → Dubai (DXB)",
+      "departureTime": "23:45",
+      "duration": "6h 45m",
+      "arrivalTime": "07:30+1",
+      "info": "Boeing 777-300ER"
+    },
+    {
+      "isFlight": false,
+      "title": "Layover at Dubai",
+      "duration": "55",
+      "info": "Tight connection"
+    }
+  ]
+}
+```
