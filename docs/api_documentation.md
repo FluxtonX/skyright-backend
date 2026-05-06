@@ -287,4 +287,21 @@ Search for cases (claims) and live flight data simultaneously.
     }
   ]
 }
-```
+---
+
+## 🏢 Enterprise & B2B (Agency/Corporate)
+### 1. Agency Clients Dashboard
+- **Endpoint:** `GET /api/agency/clients`
+- **Access:** Private (Agency Role Only)
+
+### 2. Agency Client Claims
+- **Endpoint:** `GET /api/agency/claims`
+- **Access:** Private (Agency Role Only)
+
+### 3. Corporate Duty-of-Care Monitor
+- **Endpoint:** `GET /api/corporate/employees/status`
+- **Access:** Private (Corporate Role Only)
+
+### 4. Corporate Policy Management
+- **Endpoint:** `PUT /api/corporate/policy`
+- **Access:** Private (Corporate Role Only)

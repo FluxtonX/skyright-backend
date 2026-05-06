@@ -6,8 +6,10 @@ export interface IUser extends Document {
   phoneNumber?: string;
   displayName?: string;
   photoURL?: string;
-  role: 'User' | 'Travel Agency' | 'Admin';
+  role: 'User' | 'Travel Agency' | 'Corporate' | 'Admin';
   plan: 'Free' | 'Plus' | 'Concierge Pass';
+  tenantId?: mongoose.Types.ObjectId;
+  managedByTenant: boolean;
   notificationsEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -20,8 +22,10 @@ const UserSchema: Schema = new Schema(
     phoneNumber: { type: String },
     displayName: { type: String },
     photoURL: { type: String },
-    role: { type: String, enum: ['User', 'Travel Agency', 'Admin'], default: 'User' },
+    role: { type: String, enum: ['User', 'Travel Agency', 'Corporate', 'Admin'], default: 'User' },
     plan: { type: String, enum: ['Free', 'Plus', 'Concierge Pass'], default: 'Free' },
+    tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant' },
+    managedByTenant: { type: Boolean, default: false },
     notificationsEnabled: { type: Boolean, default: true },
   },
   {

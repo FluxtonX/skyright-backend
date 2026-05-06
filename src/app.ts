@@ -15,6 +15,7 @@ import guardRoutes from './routes/guardRoutes';
 import expenseRoutes from './routes/expenseRoutes';
 import intelligenceRoutes from './routes/intelligenceRoutes';
 import tripRoutes from './routes/tripRoutes';
+import { agencyRouter, corporateRouter } from './routes/enterpriseRoutes';
 
 dotenv.config();
 
@@ -43,6 +44,8 @@ app.use('/api/guard', guardRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/intelligence', intelligenceRoutes);
 app.use('/api/trips', tripRoutes);
+app.use('/api/agency', agencyRouter);
+app.use('/api/corporate', corporateRouter);
 
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to SkyRight API' });
