@@ -48,3 +48,43 @@ export const getAIRecommendations = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// @desc    Draft a claim follow-up message without sending email
+// @route   POST /api/intelligence/claims/:id/draft-follow-up
+export const draftClaimFollowUp = async (req: AuthRequest, res: Response) => {
+  try {
+    const claim = await Claim.findById(req.params.id);
+
+    if (!claim) {
+      return res.status(404).json({ message: 'Claim not found' });
+    }
+
+    if (claim.user !== req.user._id) {
+      return res.status(401).json({ message: 'User not authorized' });
+    }
+
+    const tone = req.body.tone || 'polite but firm';
+    const draft = [
+      `Subject: Follow-up on ${claim.flightCode || 'my flight'} disruption claim`,
+      '',
+      `Dear ${claim.airline || 'Airline'} Customer Support,`,
+      '',
+      `I am following up on my compensation claim for ${claim.flightCode || 'the disrupted flight'}.`,
+      `The disruption type recorded is ${claim.disruptionType || 'a travel disruption'}, and I would appreciate an update on the review status.`,
+      '',
+      `Please treat this as a ${tone} reminder and let me know if any additional documentation is required.`,
+      '',
+      'Kind regards,',
+      req.user.displayName || req.user.email,
+    ].join('\n');
+
+    res.json({
+      claimId: claim._id,
+      tone,
+      draft,
+      status: 'DRAFT',
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error.message });
+  }
+};

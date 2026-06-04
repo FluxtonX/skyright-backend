@@ -15,6 +15,10 @@ import guardRoutes from './routes/guardRoutes';
 import expenseRoutes from './routes/expenseRoutes';
 import intelligenceRoutes from './routes/intelligenceRoutes';
 import tripRoutes from './routes/tripRoutes';
+import notificationRoutes from './routes/notificationRoutes';
+import subscriptionRoutes from './routes/subscriptionRoutes';
+import supportRoutes from './routes/supportRoutes';
+import academyRoutes from './routes/academyRoutes';
 import { agencyRouter, corporateRouter } from './routes/enterpriseRoutes';
 
 dotenv.config();
@@ -44,6 +48,10 @@ app.use('/api/guard', guardRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/intelligence', intelligenceRoutes);
 app.use('/api/trips', tripRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api', subscriptionRoutes);
+app.use('/api', supportRoutes);
+app.use('/api/academy', academyRoutes);
 app.use('/api/agency', agencyRouter);
 app.use('/api/corporate', corporateRouter);
 

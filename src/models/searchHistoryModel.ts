@@ -1,3 +1,3 @@
 import { createFirestoreModel } from './firestoreModel';
 
-export default createFirestoreModel('documents');
+export default createFirestoreModel('searchHistory');

@@ -305,3 +305,77 @@ Search for cases (claims) and live flight data simultaneously.
 ### 4. Corporate Policy Management
 - **Endpoint:** `PUT /api/corporate/policy`
 - **Access:** Private (Corporate Role Only)
+
+---
+
+## Recent Custom APIs Added
+
+All endpoints below use Firebase Auth tokens and Firestore/Firebase Storage. They do not require new third-party API access.
+
+### Search
+- `GET /api/search/suggestions?query=abc`
+- `GET /api/search/recent`
+- `DELETE /api/search/recent`
+
+### Auth, Onboarding & Settings
+- `GET /api/auth/onboarding`
+- `GET /api/auth/profile/settings`
+- `PATCH /api/auth/profile/settings`
+
+### Vault
+- `GET /api/vault/:id`
+- `PATCH /api/vault/:id`
+- `POST /api/vault/:id/link-claim`
+
+### Plans & Subscription
+- `GET /api/plans`
+- `GET /api/subscription/current`
+- `POST /api/subscription/change-plan`
+- `POST /api/subscription/cancel`
+
+### Claims
+- `POST /api/claims/estimate`
+- `GET /api/claims/:id`
+- `GET /api/claims/:id/timeline`
+- `GET /api/claims/:id/notes`
+- `POST /api/claims/:id/notes`
+- `DELETE /api/claims/:id/notes/:noteId`
+- `POST /api/claims/:id/escalate`
+- `GET /api/claims/:id/evidence-packet`
+
+### TicketGuard
+- `GET /api/guard/:id`
+- `DELETE /api/guard/:id`
+- `POST /api/guard/:id/start-claim`
+
+### Alerts & Preferences
+- `GET /api/alerts/preferences`
+- `PATCH /api/alerts/preferences`
+
+### Expenses
+- `GET /api/expenses/:id`
+- `GET /api/expenses/report`
+
+### BagTrack
+- `POST /api/plus/baggage/item/:id/photos`
+- `DELETE /api/plus/baggage/item/:id/photos/:photoId`
+
+### BorderReady
+- `GET /api/plus/compliance/checklist`
+- `PUT /api/plus/compliance/checklist`
+
+### Trip Visualizer
+- `GET /api/trips/:id/insights`
+- `GET /api/trips/:id/live-status`
+- `POST /api/trips/:id/track-live`
+
+### Academy, Concierge & Sales CTAs
+- `GET /api/academy/classes`
+- `GET /api/academy/progress`
+- `PUT /api/academy/classes/:id/progress`
+- `GET /api/concierge/status`
+- `POST /api/concierge/request`
+- `GET /api/support/requests`
+- `POST /api/support/requests`
+- `POST /api/sales/demo-request`
+- `POST /api/sales/contact`
