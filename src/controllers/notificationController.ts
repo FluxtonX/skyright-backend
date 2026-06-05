@@ -2,7 +2,7 @@ import { Response } from 'express';
 import admin from '../config/firebase';
 import { AuthRequest } from '../middlewares/authMiddleware';
 
-const db = admin.firestore();
+const getDb = () => admin.firestore();
 
 // @desc    Register/update a Firebase Cloud Messaging device token
 // @route   POST /api/notifications/devices
@@ -17,7 +17,7 @@ export const registerDeviceToken = async (req: AuthRequest, res: Response) => {
     const docId = `${req.user.firebaseId}_${token}`;
     const now = admin.firestore.FieldValue.serverTimestamp();
 
-    await db.collection('notificationDevices').doc(docId).set(
+    await getDb().collection('notificationDevices').doc(docId).set(
       {
         userId: req.user.firebaseId,
         token,
@@ -47,7 +47,7 @@ export const unregisterDeviceToken = async (req: AuthRequest, res: Response) => 
     }
 
     const docId = `${req.user.firebaseId}_${token}`;
-    await db.collection('notificationDevices').doc(docId).set(
+    await getDb().collection('notificationDevices').doc(docId).set(
       {
         active: false,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -65,13 +65,13 @@ export const unregisterDeviceToken = async (req: AuthRequest, res: Response) => 
 // @route   GET /api/notifications/devices
 export const getDeviceTokens = async (req: AuthRequest, res: Response) => {
   try {
-    const snapshot = await db
+    const snapshot = await getDb()
       .collection('notificationDevices')
       .where('userId', '==', req.user.firebaseId)
       .where('active', '==', true)
       .get();
 
-    res.json(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+    res.json(snapshot.docs.map((doc: any) => ({ id: doc.id, ...doc.data() })));
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }

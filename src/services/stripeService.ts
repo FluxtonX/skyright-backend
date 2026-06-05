@@ -3,9 +3,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
-  apiVersion: '2025-01-27-acacia' as any, // Latest stable
-});
+// Lazy getter — avoids crash when STRIPE_SECRET_KEY is empty at startup
+const getStripe = (): any => {
+  if (!process.env.STRIPE_SECRET_KEY) return null;
+  return new Stripe(process.env.STRIPE_SECRET_KEY, {
+    apiVersion: '2025-01-27-acacia' as any,
+  });
+};
 
 export const createStripeCheckoutSession = async (email: string, amount: number) => {
   try {
@@ -14,7 +18,7 @@ export const createStripeCheckoutSession = async (email: string, amount: number)
       return { id: 'mock_session_id', url: 'https://checkout.stripe.com/mock' };
     }
 
-    const session = await stripe.checkout.sessions.create({
+    const session = await getStripe()!.checkout.sessions.create({
       payment_method_types: ['card'],
       customer_email: email,
       line_items: [
@@ -44,8 +48,10 @@ export const createStripeCheckoutSession = async (email: string, amount: number)
 
 export const verifyStripeWebhook = (rawBody: any, signature: string) => {
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET || '';
+  const stripeClient = getStripe();
+  if (!stripeClient) throw new Error('Stripe is not configured.');
   try {
-    return stripe.webhooks.constructEvent(rawBody, signature, endpointSecret);
+    return stripeClient.webhooks.constructEvent(rawBody, signature, endpointSecret);
   } catch (err: any) {
     console.error(`Webhook Error: ${err.message}`);
     throw new Error(`Webhook Error: ${err.message}`);

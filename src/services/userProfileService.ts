@@ -26,7 +26,8 @@ export interface UserProfile {
 }
 
 const USERS_COLLECTION = 'users';
-const db = admin.firestore();
+// Lazy getter — avoids crash when Firebase failed to initialize at startup
+const getDb = () => admin.firestore();
 
 const toDate = (value: any): Date | null => {
   if (!value) {
@@ -63,7 +64,7 @@ const toProfile = (firebaseId: string, data: FirebaseFirestore.DocumentData): Us
 });
 
 export const getUserProfileByFirebaseId = async (firebaseId: string): Promise<UserProfile | null> => {
-  const snapshot = await db.collection(USERS_COLLECTION).doc(firebaseId).get();
+  const snapshot = await getDb().collection(USERS_COLLECTION).doc(firebaseId).get();
 
   if (!snapshot.exists) {
     return null;
@@ -74,7 +75,7 @@ export const getUserProfileByFirebaseId = async (firebaseId: string): Promise<Us
 
 export const upsertUserFromFirebaseToken = async (decodedToken: admin.auth.DecodedIdToken): Promise<UserProfile> => {
   const firebaseId = decodedToken.uid;
-  const userRef = db.collection(USERS_COLLECTION).doc(firebaseId);
+  const userRef = getDb().collection(USERS_COLLECTION).doc(firebaseId);
   const snapshot = await userRef.get();
   const now = admin.firestore.FieldValue.serverTimestamp();
 
@@ -112,7 +113,7 @@ export const updateUserProfileFields = async (
   firebaseId: string,
   updates: Partial<UserProfile> & Record<string, any>
 ): Promise<UserProfile | null> => {
-  const userRef = db.collection(USERS_COLLECTION).doc(firebaseId);
+  const userRef = getDb().collection(USERS_COLLECTION).doc(firebaseId);
   const snapshot = await userRef.get();
 
   if (!snapshot.exists) {
@@ -132,7 +133,7 @@ export const updateUserProfileFields = async (
 };
 
 export const deleteUserProfile = async (firebaseId: string) => {
-  await db.collection(USERS_COLLECTION).doc(firebaseId).delete();
+  await getDb().collection(USERS_COLLECTION).doc(firebaseId).delete();
 };
 
 const deleteQueryBatch = async (query: FirebaseFirestore.Query) => {
@@ -142,7 +143,7 @@ const deleteQueryBatch = async (query: FirebaseFirestore.Query) => {
     return;
   }
 
-  const batch = db.batch();
+  const batch = getDb().batch();
   snapshot.docs.forEach((doc) => batch.delete(doc.ref));
   await batch.commit();
 
@@ -163,7 +164,7 @@ export const deleteOwnedUserData = async (firebaseId: string) => {
   ];
 
   for (const collectionName of ownedCollections) {
-    await deleteQueryBatch(db.collection(collectionName).where('userId', '==', firebaseId));
-    await deleteQueryBatch(db.collection(collectionName).where('firebaseId', '==', firebaseId));
+    await deleteQueryBatch(getDb().collection(collectionName).where('userId', '==', firebaseId));
+    await deleteQueryBatch(getDb().collection(collectionName).where('firebaseId', '==', firebaseId));
   }
 };
