@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "postinstall": "npm run build",
     "start": "node index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "seed:dashboard": "ts-node-dev --transpile-only --exit-child scripts/seedDashboardDemo.ts",
