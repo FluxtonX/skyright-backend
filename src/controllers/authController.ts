@@ -270,6 +270,8 @@ export const getProfileStats = async (req: AuthRequest, res: Response) => {
     Document.find({ user: user._id }),
     Trip.find({ user: user._id }),
   ]);
+  const usage = user.settings?.monthlyUsage || {};
+  const isPaidPlan = user.plan === 'Plus' || user.plan === 'Concierge Pass' || user.role === 'Admin';
 
   res.json({
     savedTrips: trips.length,
@@ -277,6 +279,16 @@ export const getProfileStats = async (req: AuthRequest, res: Response) => {
     savedCases: claims.length,
     academyClasses: 0,
     conciergeActive: user.plan === 'Concierge Pass',
+    flightsMonitored: usage.flightsMonitored ?? trips.length,
+    flightsMonitoredMax: usage.flightsMonitoredMax ?? (isPaidPlan ? 999 : 2),
+    claimsFiled: usage.claimsFiled ?? claims.length,
+    claimsFiledMax: usage.claimsFiledMax ?? (isPaidPlan ? 999 : 1),
+    aiComplaintLetters: usage.aiComplaintLetters ?? 0,
+    aiComplaintLettersMax: usage.aiComplaintLettersMax ?? (isPaidPlan ? 999 : 1),
+    aiAssistantQuestions: usage.aiAssistantQuestions ?? 0,
+    aiAssistantQuestionsMax: usage.aiAssistantQuestionsMax ?? (isPaidPlan ? 999 : 5),
+    documentUploads: usage.documentUploads ?? documents.length,
+    documentUploadsMax: usage.documentUploadsMax ?? (isPaidPlan ? 999 : 5),
   });
 };
 

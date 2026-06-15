@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
+import { updateUserProfileFields } from '../services/userProfileService';
 import {
   AssistantChatMessage,
   AssistantServiceError,
@@ -36,6 +37,25 @@ export const chatWithAssistant = async (req: AuthRequest, res: Response) => {
 
   try {
     const reply = await generateAssistantReply(message, history);
+    const monthlyUsage = req.user?.settings?.monthlyUsage || {};
+
+    if (req.user) {
+      try {
+        await updateUserProfileFields(req.user.firebaseId, {
+          settings: {
+            ...(req.user.settings || {}),
+            monthlyUsage: {
+              ...monthlyUsage,
+              aiAssistantQuestions: (monthlyUsage.aiAssistantQuestions || 0) + 1,
+            },
+          },
+        });
+      } catch (usageError) {
+        console.error('Assistant usage update error:', {
+          message: usageError instanceof Error ? usageError.message : 'Unknown usage update error',
+        });
+      }
+    }
 
     return res.json({
       reply,
