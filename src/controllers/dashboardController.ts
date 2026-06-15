@@ -54,6 +54,28 @@ export const getDashboardActivity = async (req: AuthRequest, res: Response) => {
       Trip.find({ user: userId }).sort({ createdAt: -1 }).limit(5),
     ]);
 
+    const isReadableTripValue = (value?: string) => {
+      if (!value) return false;
+      const normalized = String(value).trim().toLowerCase();
+      return normalized !== 'unknown' && normalized !== '--';
+    };
+
+    const buildTripSubtitle = (item: any) => {
+      const origin = isReadableTripValue(item.origin) ? item.origin.trim() : '';
+      const destination = isReadableTripValue(item.destination) ? item.destination.trim() : '';
+      const departureDate = isReadableTripValue(item.departureDate)
+        ? item.departureDate.trim()
+        : isReadableTripValue(item.totalDuration)
+          ? item.totalDuration.trim()
+          : '';
+
+      const route = origin && destination ? `${origin} → ${destination}` : '';
+      if (route && departureDate) return `${route} • ${departureDate}`;
+      if (route) return route;
+      if (departureDate) return departureDate;
+      return 'Trip saved';
+    };
+
     const activity = [
       ...alerts.map((item: any) => ({
         id: item._id,
@@ -79,8 +101,12 @@ export const getDashboardActivity = async (req: AuthRequest, res: Response) => {
       ...trips.map((item: any) => ({
         id: item._id,
         type: 'trip',
-        title: item.tripName || `${item.origin || ''} - ${item.destination || ''}`,
-        subtitle: item.destination || '',
+        title: isReadableTripValue(item.flightNumber)
+          ? item.flightNumber.trim()
+          : isReadableTripValue(item.tripName)
+            ? item.tripName.trim()
+            : 'Trip added',
+        subtitle: buildTripSubtitle(item),
         createdAt: item.createdAt,
       })),
     ].sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 15);

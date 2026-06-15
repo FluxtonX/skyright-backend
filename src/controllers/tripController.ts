@@ -6,7 +6,26 @@ import Trip from '../models/tripModel';
 // @route   POST /api/trips
 export const createTrip = async (req: AuthRequest, res: Response) => {
   try {
-    const { tripName, origin, destination, totalDuration, stops, timeline } = req.body;
+    const {
+      tripName,
+      flightNumber,
+      origin,
+      destination,
+      departureDate,
+      bookingReference,
+      totalDuration,
+      stops,
+      timeline = [],
+    } = req.body;
+
+    const resolvedFlightNumber = (flightNumber || tripName || '').trim();
+    const resolvedDepartureDate = (departureDate || totalDuration || '').trim();
+
+    if (!resolvedFlightNumber || !origin || !destination || !resolvedDepartureDate) {
+      return res.status(400).json({
+        message: 'Flight number, origin, destination, and departure date are required',
+      });
+    }
 
     // Risk Engine Logic: Automatically calculate risk based on layover duration
     const processedTimeline = timeline.map((leg: any) => {
@@ -28,11 +47,14 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
     const trip = await Trip.create({
       user: req.user._id,
       userId: req.user.firebaseId,
-      tripName,
-      origin,
-      destination,
-      totalDuration,
-      stops,
+      tripName: resolvedFlightNumber,
+      flightNumber: resolvedFlightNumber,
+      origin: origin.trim(),
+      destination: destination.trim(),
+      departureDate: resolvedDepartureDate,
+      bookingReference: bookingReference?.trim() || undefined,
+      totalDuration: totalDuration || resolvedDepartureDate,
+      stops: stops || 0,
       timeline: processedTimeline
     });
 
@@ -61,7 +83,7 @@ export const getTripDetails = async (req: AuthRequest, res: Response) => {
     if (!trip) {
       return res.status(404).json({ message: 'Trip not found' });
     }
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
     res.json(trip);
@@ -80,7 +102,7 @@ export const getTripInsights = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
@@ -119,7 +141,7 @@ export const getTripLiveStatus = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
@@ -146,7 +168,7 @@ export const enableTripLiveTracking = async (req: AuthRequest, res: Response) =>
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
@@ -175,11 +197,23 @@ export const updateTrip = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
-    const fields = ['tripName', 'origin', 'destination', 'totalDuration', 'stops', 'timeline', 'status'];
+    const fields = [
+      'tripName',
+      'flightNumber',
+      'origin',
+      'destination',
+      'departureDate',
+      'bookingReference',
+      'totalDuration',
+      'stops',
+      'timeline',
+      'trackingEnabled',
+      'status',
+    ];
     fields.forEach((field) => {
       if (req.body[field] !== undefined) {
         trip[field] = req.body[field];
@@ -203,7 +237,7 @@ export const deleteTrip = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
@@ -224,7 +258,7 @@ export const shareTrip = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: 'Trip not found' });
     }
 
-    if (trip.user !== req.user._id) {
+    if (String(trip.user) !== String(req.user._id)) {
       return res.status(401).json({ message: 'User not authorized' });
     }
 
