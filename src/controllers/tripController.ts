@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import Trip from '../models/tripModel';
+import { getFlightStatus } from '../services/flightService';
 
 // @desc    Create a new trip journey
 // @route   POST /api/trips
@@ -18,17 +19,79 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
       timeline = [],
     } = req.body;
 
-    const resolvedFlightNumber = (flightNumber || tripName || '').trim();
+    const resolvedFlightNumber = (flightNumber || tripName || '').trim().toUpperCase();
     const resolvedDepartureDate = (departureDate || totalDuration || '').trim();
 
-    if (!resolvedFlightNumber || !origin || !destination || !resolvedDepartureDate) {
+    if (!resolvedFlightNumber || !resolvedDepartureDate) {
       return res.status(400).json({
-        message: 'Flight number, origin, destination, and departure date are required',
+        message: 'Flight number and departure date are required',
       });
     }
 
+    let flightLookupError = '';
+    const flightData = await getFlightStatus(resolvedFlightNumber, resolvedDepartureDate)
+      .catch((error) => {
+        flightLookupError = error instanceof Error ? error.message : 'Flight provider lookup failed';
+        console.error('Create trip flight lookup failed:', {
+          message: flightLookupError,
+          flightNumber: resolvedFlightNumber,
+          departureDate: resolvedDepartureDate,
+        });
+        return null;
+      });
+    const resolvedOrigin = flightData?.departure?.iata || origin?.trim().toUpperCase();
+    const resolvedDestination = flightData?.arrival?.iata || destination?.trim().toUpperCase();
+
+    if (!resolvedOrigin || !resolvedDestination) {
+      const providerRejectedRequest = flightLookupError.includes('rejected the request');
+      return res.status(flightLookupError ? 503 : 400).json({
+        message: flightLookupError
+          ? providerRejectedRequest
+            ? 'Aviationstack rejected this request. Check your API key, subscription plan, and base URL, or enter origin and destination manually to save this flight without provider data.'
+            : 'Aviationstack is unavailable right now. Enter origin and destination manually to save this flight, or try again later.'
+          : 'Flight was not found. Enter origin and destination manually to save this flight.',
+        providerError: flightLookupError || undefined,
+      });
+    }
+    const resolvedStatus = flightData?.flight_status || 'planned';
+    const resolvedTimeline = flightData
+      ? [
+          {
+            isFlight: true,
+            airlineCode: flightData.airline?.iata || '',
+            from: resolvedOrigin,
+            to: resolvedDestination,
+            fromTime: flightData.departure?.scheduled || '',
+            toTime: flightData.arrival?.scheduled || '',
+            date: flightData.flight_date || resolvedDepartureDate,
+            delayProb: flightData.departure?.delay ? `${flightData.departure.delay} min delay` : 'On time',
+            activeAlerts: flightData.departure?.delay || flightData.arrival?.delay ? 1 : 0,
+            riskLevel:
+              flightData.flight_status === 'cancelled' ||
+              (flightData.departure?.delay || 0) >= 120
+                ? 'High'
+                : (flightData.departure?.delay || 0) > 0
+                  ? 'Medium'
+                  : 'Low',
+            riskColor:
+              flightData.flight_status === 'cancelled' ||
+              (flightData.departure?.delay || 0) >= 120
+                ? '#EF4444'
+                : (flightData.departure?.delay || 0) > 0
+                  ? '#FFC229'
+                  : '#10B981',
+            info:
+              flightData.flight_status === 'cancelled'
+                ? 'Flight cancelled'
+                : flightData.departure?.delay
+                  ? `Departure delayed by ${flightData.departure.delay} minutes`
+                  : 'Flight found and monitoring enabled',
+          },
+        ]
+      : timeline;
+
     // Risk Engine Logic: Automatically calculate risk based on layover duration
-    const processedTimeline = timeline.map((leg: any) => {
+    const processedTimeline = resolvedTimeline.map((leg: any) => {
       if (!leg.isFlight && leg.duration) {
         const minutes = parseInt(leg.duration);
         if (minutes < 60) {
@@ -49,13 +112,16 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
       userId: req.user.firebaseId,
       tripName: resolvedFlightNumber,
       flightNumber: resolvedFlightNumber,
-      origin: origin.trim(),
-      destination: destination.trim(),
-      departureDate: resolvedDepartureDate,
+      origin: resolvedOrigin,
+      destination: resolvedDestination,
+      departureDate: flightData?.flight_date || resolvedDepartureDate,
       bookingReference: bookingReference?.trim() || undefined,
       totalDuration: totalDuration || resolvedDepartureDate,
       stops: stops || 0,
-      timeline: processedTimeline
+      timeline: processedTimeline,
+      status: resolvedStatus,
+      trackingEnabled: Boolean(flightData),
+      lastTrackedAt: flightData ? new Date().toISOString() : undefined,
     });
 
     res.status(201).json(trip);

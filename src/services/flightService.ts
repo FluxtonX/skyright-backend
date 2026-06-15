@@ -3,7 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const AVIATIONSTACK_BASE_URL = 'http://api.aviationstack.com/v1';
+const AVIATIONSTACK_BASE_URL =
+  process.env.AVIATIONSTACK_BASE_URL || 'http://api.aviationstack.com/v1';
 const API_KEY = process.env.AVIATIONSTACK_API_KEY;
 
 export interface FlightData {
@@ -42,20 +43,64 @@ export interface FlightData {
   };
 }
 
-export const getFlightStatus = async (flightIata: string): Promise<FlightData | null> => {
+const normalizeFlightIata = (flightIata: string) =>
+  flightIata.trim().toUpperCase().replace(/\s+/g, '');
+
+const getFlightErrorMessage = (error: unknown): string => {
+  if (axios.isAxiosError(error)) {
+    const status = error.response?.status;
+
+    if (error.code === 'ENOTFOUND') {
+      return `Could not resolve Aviationstack host from ${AVIATIONSTACK_BASE_URL}`;
+    }
+
+    if (error.code === 'ECONNABORTED') {
+      return 'Aviationstack request timed out';
+    }
+
+    const providerMessage = error.response?.data?.error?.info || error.response?.data?.message;
+    if (providerMessage) return providerMessage;
+
+    if (status === 401 || status === 403) {
+      return `Aviationstack rejected the request with status ${status}. Check AVIATIONSTACK_API_KEY, plan access, and AVIATIONSTACK_BASE_URL.`;
+    }
+
+    if (status) {
+      return `Aviationstack request failed with status ${status}`;
+    }
+
+    return error.message;
+  }
+
+  return error instanceof Error ? error.message : 'Unknown flight provider error';
+};
+
+export const getFlightStatus = async (
+  flightIata: string,
+  flightDate?: string
+): Promise<FlightData | null> => {
+  const normalizedFlightIata = normalizeFlightIata(flightIata);
+
   try {
     // If no API key, return mock data for testing
     if (!API_KEY) {
       console.log('Mock Mode: No Aviationstack API key found. Returning mock data.');
-      return getMockFlightData(flightIata);
+      return getMockFlightData(normalizedFlightIata, flightDate);
     }
 
     const response = await axios.get(`${AVIATIONSTACK_BASE_URL}/flights`, {
+      timeout: 10000,
       params: {
         access_key: API_KEY,
-        flight_iata: flightIata,
+        flight_iata: normalizedFlightIata,
+        ...(flightDate ? { flight_date: flightDate } : {}),
       },
     });
+
+    if (response.data?.error) {
+      console.error('Aviationstack API error:', response.data.error);
+      throw new Error(response.data.error.info || 'Aviationstack API error');
+    }
 
     if (response.data && response.data.data && response.data.data.length > 0) {
       return response.data.data[0];
@@ -63,14 +108,24 @@ export const getFlightStatus = async (flightIata: string): Promise<FlightData | 
 
     return null;
   } catch (error) {
-    console.error('Error fetching flight status:', error);
-    throw new Error('Failed to fetch flight data');
+    const message = getFlightErrorMessage(error);
+    console.error('Error fetching flight status:', {
+      message,
+      flightIata: normalizedFlightIata,
+      flightDate,
+      providerBaseUrl: AVIATIONSTACK_BASE_URL,
+      status: axios.isAxiosError(error) ? error.response?.status : undefined,
+      contentType: axios.isAxiosError(error)
+        ? error.response?.headers?.['content-type']
+        : undefined,
+    });
+    throw new Error(message);
   }
 };
 
-const getMockFlightData = (flightIata: string): FlightData => {
+const getMockFlightData = (flightIata: string, flightDate?: string): FlightData => {
   return {
-    flight_date: new Date().toISOString().split('T')[0],
+    flight_date: flightDate || new Date().toISOString().split('T')[0],
     flight_status: 'active',
     departure: {
       airport: 'Lagos International',
