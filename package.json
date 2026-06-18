@@ -8,6 +8,7 @@
     "start": "node index.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "seed:dashboard": "ts-node-dev --transpile-only --exit-child scripts/seedDashboardDemo.ts",
+    "seed:today-flights": "ts-node-dev --transpile-only --exit-child scripts/seedTodayActiveFlights.ts",
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -18,6 +18,20 @@ const normalizeValue = (value: any): any => {
   return value;
 };
 
+// Remove undefined fields recursively so Firestore doesn't reject the document
+const stripUndefined = (obj: Record<string, any>): Record<string, any> => {
+  return Object.fromEntries(
+    Object.entries(obj)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => [
+        k,
+        v && typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)
+          ? stripUndefined(v)
+          : v,
+      ])
+  );
+};
+
 const matchesField = (actualRaw: any, expected: any): boolean => {
   const actual = normalizeValue(actualRaw);
 
@@ -76,7 +90,8 @@ export class FirestoreDocument {
 
   async save() {
     this.updatedAt = new Date().toISOString();
-    await db.collection(this.collectionName).doc(this._id).set(this.toJSON(), { merge: true });
+    const clean = stripUndefined(this.toJSON());
+    await db.collection(this.collectionName).doc(this._id).set(clean, { merge: true });
     return this;
   }
 
@@ -169,13 +184,16 @@ export const createFirestoreModel = <T extends FirestoreDocument = FirestoreDocu
     static async create(data: Record<string, any>) {
       const now = new Date().toISOString();
       const docRef = collection.doc();
-      const payload = {
+      const rawPayload = {
         ...data,
         _id: docRef.id,
         id: docRef.id,
         createdAt: data.createdAt || now,
         updatedAt: data.updatedAt || now,
       };
+
+      // Strip undefined fields — Firestore rejects them
+      const payload = stripUndefined(rawPayload);
 
       await docRef.set(payload);
       return wrap(payload);

@@ -21,6 +21,7 @@ import supportRoutes from './routes/supportRoutes';
 import academyRoutes from './routes/academyRoutes';
 import assistantRoutes from './routes/assistantRoutes';
 import { agencyRouter, corporateRouter } from './routes/enterpriseRoutes';
+import flightRoutes from './routes/flightRoutes';
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use('/api/academy', academyRoutes);
 app.use('/api/assistant', assistantRoutes);
 app.use('/api/agency', agencyRouter);
 app.use('/api/corporate', corporateRouter);
+app.use('/api/flights', flightRoutes);
 
 app.get('/', (req: Request, res: Response) => {
   res.json({ message: 'Welcome to SkyRight API' });

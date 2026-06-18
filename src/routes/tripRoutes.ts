@@ -7,6 +7,7 @@ import {
   getTripInsights,
   getTripLiveStatus,
   getUserTrips,
+  lookupFlightForTrip,
   shareTrip,
   updateTrip,
 } from '../controllers/tripController';
@@ -18,6 +19,7 @@ router.route('/')
   .post(protect, createTrip)
   .get(protect, getUserTrips);
 
+router.post('/flight-lookup', protect, lookupFlightForTrip);
 router.post('/:id/share', protect, shareTrip);
 router.get('/:id/insights', protect, getTripInsights);
 router.get('/:id/live-status', protect, getTripLiveStatus);

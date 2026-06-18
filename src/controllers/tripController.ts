@@ -3,6 +3,50 @@ import { AuthRequest } from '../middlewares/authMiddleware';
 import Trip from '../models/tripModel';
 import { getFlightStatus } from '../services/flightService';
 
+// @desc    Lookup flight details before creating a trip
+// @route   POST /api/trips/flight-lookup
+export const lookupFlightForTrip = async (req: AuthRequest, res: Response) => {
+  try {
+    const flightNumber = (req.body.flightNumber || '').trim().toUpperCase();
+    const departureDate = (req.body.departureDate || '').trim();
+
+    if (!flightNumber) {
+      return res.status(400).json({ message: 'Flight number is required' });
+    }
+
+    const flightData = await getFlightStatus(
+      flightNumber,
+      departureDate || undefined
+    );
+
+    if (!flightData) {
+      return res.status(404).json({
+        message: 'Flight was not found. Check the flight number or enter route details manually.',
+      });
+    }
+
+    res.json({
+      flightNumber: flightData.flight?.iata || flightNumber,
+      flightDate: flightData.flight_date || departureDate,
+      status: flightData.flight_status || 'planned',
+      origin: flightData.departure?.iata || '',
+      originAirport: flightData.departure?.airport || '',
+      destination: flightData.arrival?.iata || '',
+      destinationAirport: flightData.arrival?.airport || '',
+      airline: flightData.airline?.name || '',
+      departureScheduled: flightData.departure?.scheduled || '',
+      arrivalScheduled: flightData.arrival?.scheduled || '',
+      departureDelay: flightData.departure?.delay || 0,
+      arrivalDelay: flightData.arrival?.delay || 0,
+    });
+  } catch (error: any) {
+    res.status(503).json({
+      message: 'Aviationstack is unavailable right now. Enter route details manually or try again later.',
+      providerError: error.message,
+    });
+  }
+};
+
 // @desc    Create a new trip journey
 // @route   POST /api/trips
 export const createTrip = async (req: AuthRequest, res: Response) => {
@@ -115,7 +159,7 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
       origin: resolvedOrigin,
       destination: resolvedDestination,
       departureDate: flightData?.flight_date || resolvedDepartureDate,
-      bookingReference: bookingReference?.trim() || undefined,
+      bookingReference: bookingReference?.trim() || null,
       totalDuration: totalDuration || resolvedDepartureDate,
       stops: stops || 0,
       timeline: processedTimeline,
