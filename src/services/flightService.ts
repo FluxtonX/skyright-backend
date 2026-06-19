@@ -1,5 +1,7 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import Trip from '../models/tripModel';
+import AlertModel from '../models/alertModel';
 
 dotenv.config();
 
@@ -31,7 +33,7 @@ export interface FlightData {
     delay: number;
     scheduled: string;
     estimated: string;
-    actual: string;         // set once the flight has actually landed
+    actual?: string;         // set once the flight has actually landed
   };
   airline: {
     name: string;
@@ -218,34 +220,40 @@ export const getFlightStatus = async (
 };
 
 const getMockFlightData = (flightIata: string, flightDate?: string): FlightData => {
+  // Mock times use LOCAL airport times with the correct UTC offset already embedded.
+  // e.g. "+05:00" for PKT (Karachi), "+01:00" for WAT (Lagos).
+  // The frontend extracts the HH:mm component directly — do NOT use +00:00 here
+  // unless the airport's local timezone is genuinely UTC, as that would display
+  // UTC time on screen instead of the correct local airport time.
   return {
     flight_date: flightDate || new Date().toISOString().split('T')[0],
     flight_status: 'active',
     departure: {
-      airport: 'Lagos International',
-      timezone: 'Africa/Lagos',
-      iata: 'LOS',
-      icao: 'DNMM',
+      airport: 'Jinnah International Airport',
+      timezone: 'Asia/Karachi',
+      iata: 'KHI',
+      icao: 'OPKC',
       terminal: '1',
       gate: 'B12',
       delay: 120,
-      scheduled: '2026-05-05T14:00:00+00:00',
-      estimated: '2026-05-05T16:00:00+00:00',
+      scheduled: '2026-05-05T14:00:00+05:00',
+      estimated: '2026-05-05T16:00:00+05:00',
     },
     arrival: {
-      airport: 'Abuja International',
-      iata: 'ABV',
-      icao: 'DNAA',
+      airport: 'Allama Iqbal International Airport',
+      timezone: 'Asia/Karachi',
+      iata: 'LHE',
+      icao: 'OPLA',
       terminal: 'D',
       gate: '4',
       delay: 120,
-      scheduled: '2026-05-05T15:15:00+00:00',
-      estimated: '2026-05-05T17:15:00+00:00',
+      scheduled: '2026-05-05T15:15:00+05:00',
+      estimated: '2026-05-05T17:15:00+05:00',
     },
     airline: {
-      name: 'Air Peace',
-      iata: 'P4',
-      icao: 'APK',
+      name: 'Pakistan International Airlines',
+      iata: 'PK',
+      icao: 'PIA',
     },
     flight: {
       number: flightIata.replace(/[^0-9]/g, ''),
@@ -371,31 +379,102 @@ export const checkFlightStatus = async (
   }
 };
 
-// ── Delay threshold ───────────────────────────────────────────────────────────
-// A delay must exceed this many minutes before we consider it "significant"
-// and override the raw Aviationstack status.
+// ── Thresholds ────────────────────────────────────────────────────────────────
+
+/** Minutes of delay before an "active" or "scheduled" status gets a delay tag. */
 const SIGNIFICANT_DELAY_MINUTES = 15;
 
 /**
- * resolveEstimatedLanding
+ * Minutes PAST the reference arrival timestamp before we declare the flight
+ * landed.  Smaller buffers for more precise timestamps.
  *
- * Aviationstack can be slow to flip a flight from "active" → "landed".
- * We compare the current UTC wall-clock time against the best available
- * arrival time (actual > estimated > scheduled) and, when now is past that
- * time, mark the flight as "landed_estimated" so the frontend mirrors
- * Flightradar24 behaviour.
+ *  • actual    → 5 min   confirmed wheels-down, very precise
+ *  • estimated → 15 min  gate estimate, updated en-route
+ *  • scheduled → 20 min  least accurate — wait longer before overriding
+ */
+const LANDED_ACTUAL_BUFFER_MIN    =  5;
+const LANDED_ESTIMATED_BUFFER_MIN = 15;
+const LANDED_SCHEDULED_BUFFER_MIN = 20;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// isoToUtcMs
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Converts an ISO-8601 datetime string to a UTC millisecond timestamp.
  *
- * Priority order for the reference arrival time:
- *   1. arrival.actual     — most accurate, set once wheels are down
- *   2. arrival.estimated  — gate estimate, updated during flight
- *   3. arrival.scheduled  — original schedule
+ * Three cases are handled:
+ *   (a) Offset already embedded ("+05:00" / "Z") → Date.parse() directly.
+ *   (b) Offset-naive string + IANA timezone supplied → Intl inversion.
+ *   (c) Offset-naive string + no timezone → treat as UTC (safe fallback).
  *
- * The arrival.timezone (IANA string) is used ONLY as a fallback when the
- * ISO timestamp has no embedded UTC offset.  Modern Aviationstack responses
- * always include the offset, so the Intl path is rarely hit in practice.
+ * The Intl inversion (case b) works as follows:
+ *   1. Parse the naive string as if it were UTC  → naiveAsUtcMs.
+ *   2. Format that instant in the target timezone to get the local wall-clock
+ *      reading at that UTC instant                → localAtNaiveUtcMs.
+ *   3. offsetMs = naiveAsUtcMs − localAtNaiveUtcMs
+ *      (positive for UTC+N e.g. +05:00 Asia/Karachi, negative for UTC-N).
+ *   4. trueUtcMs = naiveAsUtcMs − offsetMs
  *
- * Only overrides statuses that imply the flight is still airborne:
- *   active | active_delayed | scheduled | delayed
+ * The old code incorrectly *added* offsetMs, causing a sign flip for UTC+
+ * timezones.  This version always subtracts.
+ *
+ * Returns NaN on any parse failure so callers can guard with isNaN().
+ */
+const isoToUtcMs = (iso: string, ianaTimezone?: string): number => {
+  const trimmed = iso.trim();
+  if (!trimmed) return NaN;
+
+  // ── (a) offset already present ────────────────────────────────────────────
+  if (/[+-]\d{2}:\d{2}$/.test(trimmed) || trimmed.endsWith('Z')) {
+    return Date.parse(trimmed);
+  }
+
+  // ── (b) naive datetime + IANA tz ─────────────────────────────────────────
+  if (ianaTimezone) {
+    try {
+      const naiveAsUtcMs = Date.parse(trimmed + 'Z');
+      if (isNaN(naiveAsUtcMs)) return NaN;
+
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: ianaTimezone,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+      }).formatToParts(new Date(naiveAsUtcMs));
+
+      const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
+      const localAtNaiveUtcMs = Date.parse(
+        `${get('year')}-${get('month')}-${get('day')}` +
+        `T${get('hour')}:${get('minute')}:${get('second')}Z`
+      );
+
+      const offsetMs = naiveAsUtcMs - localAtNaiveUtcMs; // e.g. +18_000_000 for UTC+5
+      return naiveAsUtcMs - offsetMs;                     // subtract to undo shift
+    } catch {
+      // Malformed IANA string — fall through to (c)
+    }
+  }
+
+  // ── (c) no timezone info — treat as UTC ───────────────────────────────────
+  return Date.parse(trimmed + 'Z');
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveEstimatedLanding
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Determines whether a flight that Aviationstack still marks as airborne
+ * should be overridden to a landed state based on wall-clock time.
+ *
+ * Return values:
+ *   "landed"           — arrival.actual is set (confirmed wheels-down) AND
+ *                        now > actual + LANDED_ACTUAL_BUFFER_MIN (5 min).
+ *   "landed_estimated" — no confirmed actual; now > estimated/scheduled +
+ *                        their respective buffer.
+ *   null               — not past the arrival window yet; no override.
+ *
+ * Only fires for airborne statuses: active | active_delayed | scheduled | delayed.
+ * Statuses already set to "landed", "cancelled", etc. are left untouched.
  */
 const resolveEstimatedLanding = (
   rawStatus: string,
@@ -403,106 +482,132 @@ const resolveEstimatedLanding = (
 ): string | null => {
   const status = rawStatus.toLowerCase();
 
-  // Only consider statuses where the aircraft could still be airborne
-  const candidateStatuses = new Set(['active', 'active_delayed', 'scheduled', 'delayed']);
-  if (!candidateStatuses.has(status)) return null;
+  // Guard: only override statuses that imply the aircraft is still airborne
+  const airborneStatuses = new Set(['active', 'active_delayed', 'scheduled', 'delayed']);
+  if (!airborneStatuses.has(status)) return null;
 
-  // Pick the best arrival timestamp (most → least accurate)
-  const arrivalIso =
-    arrivalData?.actual?.trim() ||
-    arrivalData?.estimated?.trim() ||
-    arrivalData?.scheduled?.trim();
+  const tz = arrivalData?.timezone; // IANA string, e.g. "Asia/Karachi"
 
-  if (!arrivalIso) return null;
-
-  // Parse: ISO strings with an embedded UTC offset (e.g. "+05:30") are
-  // handled directly by Date.parse().  When the string is offset-naive we
-  // fall back to interpreting it in the destination timezone via Intl.
-  let arrivalUtcMs: number;
-
-  const hasOffset = /[+-]\d{2}:\d{2}$/.test(arrivalIso) || arrivalIso.endsWith('Z');
-
-  if (hasOffset) {
-    arrivalUtcMs = Date.parse(arrivalIso);
-  } else {
-    // No UTC offset — interpret the local time in the destination timezone
-    const tz = arrivalData?.timezone;
-    if (!tz) {
-      // No timezone info at all: fall back to treating it as UTC
-      arrivalUtcMs = Date.parse(arrivalIso + 'Z');
-    } else {
-      try {
-        // Use Intl to find the UTC offset at that moment in the destination tz
-        const parts = new Intl.DateTimeFormat('en-US', {
-          timeZone: tz,
-          year: 'numeric', month: '2-digit', day: '2-digit',
-          hour: '2-digit', minute: '2-digit', second: '2-digit',
-          hour12: false,
-        }).formatToParts(new Date(arrivalIso + 'Z'));
-
-        const get = (t: string) => parts.find(p => p.type === t)?.value ?? '00';
-        const localDateStr =
-          `${get('year')}-${get('month')}-${get('day')}` +
-          `T${get('hour')}:${get('minute')}:${get('second')}`;
-
-        // Offset = UTC interpreted time  − local interpreted time
-        const utcMs   = Date.parse(arrivalIso + 'Z');
-        const localMs = Date.parse(localDateStr + 'Z');
-        const offsetMs = utcMs - localMs;
-
-        arrivalUtcMs = Date.parse(arrivalIso + 'Z') + offsetMs;
-      } catch {
-        // Malformed timezone string — treat as UTC
-        arrivalUtcMs = Date.parse(arrivalIso + 'Z');
-      }
+  // ── Tier 1: confirmed actual landing time ─────────────────────────────────
+  const actualIso = arrivalData?.actual?.trim();
+  if (actualIso) {
+    const actualUtcMs = isoToUtcMs(actualIso, tz);
+    if (!isNaN(actualUtcMs) && Date.now() > actualUtcMs + LANDED_ACTUAL_BUFFER_MIN * 60_000) {
+      console.log('[resolveEstimatedLanding] actual arrival time passed → "landed"', {
+        actualIso,
+        bufferMin: LANDED_ACTUAL_BUFFER_MIN,
+        nowUtc: new Date().toISOString(),
+      });
+      return 'landed';
     }
   }
 
-  if (isNaN(arrivalUtcMs)) return null;
+  // ── Tier 2: estimated or scheduled arrival time ───────────────────────────
+  const estimatedIso = arrivalData?.estimated?.trim();
+  const scheduledIso = arrivalData?.scheduled?.trim();
+  const useEstimated = !!estimatedIso;             // prefer estimated over scheduled
+  const refIso       = estimatedIso || scheduledIso;
 
-  const nowMs = Date.now();
+  if (!refIso) return null;
 
-  if (nowMs > arrivalUtcMs) {
+  const refUtcMs = isoToUtcMs(refIso, tz);
+  if (isNaN(refUtcMs)) return null;
+
+  const bufferMs = (useEstimated ? LANDED_ESTIMATED_BUFFER_MIN : LANDED_SCHEDULED_BUFFER_MIN) * 60_000;
+
+  if (Date.now() > refUtcMs + bufferMs) {
     console.log(
-      `[resolveEstimatedLanding] Overriding "${rawStatus}" → "landed_estimated"`,
-      { arrivalIso, nowUtc: new Date(nowMs).toISOString() }
+      `[resolveEstimatedLanding] ${useEstimated ? 'estimated' : 'scheduled'} arrival time passed → "landed_estimated"`,
+      {
+        refIso,
+        bufferMin: useEstimated ? LANDED_ESTIMATED_BUFFER_MIN : LANDED_SCHEDULED_BUFFER_MIN,
+        nowUtc: new Date().toISOString(),
+      }
     );
     return 'landed_estimated';
   }
 
-  return null; // not past arrival time yet — leave status unchanged
+  return null; // not past arrival window — leave status unchanged
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// resolvePrematureActive
+// ─────────────────────────────────────────────────────────────────────────────
 /**
- * resolveFlightStatus
+ * Determines whether Aviationstack has prematurely marked a flight as "active"
+ * before it has even reached its departure time.
  *
- * Applies all business-rule overrides in priority order:
+ * Return values:
+ *   "scheduled" — if the status is active but now < departure time.
+ *   null        — if it's genuinely active or not active.
+ */
+const resolvePrematureActive = (
+  rawStatus: string,
+  departureData: FlightData['departure']
+): string | null => {
+  const status = rawStatus.toLowerCase();
+
+  // Only consider active statuses
+  if (status !== 'active' && status !== 'active_delayed') return null;
+
+  const tz = departureData?.timezone;
+  const estimatedIso = departureData?.estimated?.trim();
+  const scheduledIso = departureData?.scheduled?.trim();
+  const refIso       = estimatedIso || scheduledIso;
+
+  if (!refIso) return null;
+
+  const refUtcMs = isoToUtcMs(refIso, tz);
+  if (isNaN(refUtcMs)) return null;
+
+  if (Date.now() < refUtcMs) {
+    console.log(
+      `[resolvePrematureActive] active but current time is before departure → "scheduled"`,
+      { refIso, nowUtc: new Date().toISOString() }
+    );
+    return 'scheduled';
+  }
+
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// resolveFlightStatus
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Applies all business-rule overrides in strict priority order:
  *
- *  Priority | Condition                                     | Result
- * ----------|-----------------------------------------------|------------------
- *  1 (high) | now > best arrival time & airborne status     | "landed_estimated"
- *  2        | active/scheduled + departure.delay > 15 min   | "active_delayed" / "delayed"
- *  3 (low)  | none of the above                             | raw status (unchanged)
+ *  Pri | Condition                                          | Output
+ * -----|----------------------------------------------------|----------------------
+ *  1a  | arrival.actual set  + now > actual   + 5 min      | "landed"
+ *  1b  | no actual, estimated + now > estimated + 15 min   | "landed_estimated"
+ *  1c  | no actual/estimated  + now > scheduled + 20 min   | "landed_estimated"
+ *  2   | active + now < departure time                     | "scheduled"
+ *  3   | departure.delay > 15 min + active/scheduled       | "active_delayed" / "delayed"
+ *  4   | none of the above                                 | rawStatus unchanged
  */
 const resolveFlightStatus = (
   rawStatus: string,
   delayMinutes: number,
-  arrivalData: FlightData['arrival']
+  arrivalData: FlightData['arrival'],
+  departureData: FlightData['departure']
 ): string => {
-  // ── Priority 1: estimated landing ───────────────────────────────────────
-  const landedEstimated = resolveEstimatedLanding(rawStatus, arrivalData);
-  if (landedEstimated) return landedEstimated;
+  // ── Priority 1: landing-time check always wins ────────────────────────────
+  const landedOverride = resolveEstimatedLanding(rawStatus, arrivalData);
+  if (landedOverride) return landedOverride;
 
-  // ── Priority 2: significant departure delay ──────────────────────────────
+  // ── Priority 2: premature active check ────────────────────────────────────
+  const prematureOverride = resolvePrematureActive(rawStatus, departureData);
+  if (prematureOverride) rawStatus = prematureOverride;
+
+  // ── Priority 3: significant departure delay ───────────────────────────────
   const status = rawStatus.toLowerCase();
-  const hasSignificantDelay = delayMinutes > SIGNIFICANT_DELAY_MINUTES;
-
-  if (hasSignificantDelay) {
-    if (status === 'active')    return 'active_delayed'; // airborne but late
-    if (status === 'scheduled') return 'delayed';        // not departed yet
+  if (delayMinutes > SIGNIFICANT_DELAY_MINUTES) {
+    if (status === 'active')    return 'active_delayed';
+    if (status === 'scheduled') return 'delayed';
   }
 
-  // ── Priority 3: pass through unchanged ──────────────────────────────────
+  // ── Priority 4: pass through ──────────────────────────────────────────────
   return rawStatus;
 };
 
@@ -513,11 +618,12 @@ const buildFlightStatusResult = (
 ): FlightStatusResult => {
   const delayMinutes = data.departure?.delay ?? 0;
 
-  // Pass arrival data so resolveFlightStatus can run the landing-time check
+  // Pass arrival and departure data so resolveFlightStatus can run checks
   const resolvedStatus = resolveFlightStatus(
     data.flight_status,
     delayMinutes,
-    data.arrival
+    data.arrival,
+    data.departure
   );
 
   return {
@@ -546,4 +652,74 @@ const buildFlightStatusResult = (
       iata: data.airline?.iata ?? '',
     },
   };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// monitorFlightsAndCreateAlerts
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Cron job handler to fetch all actively tracked trips, check their live status,
+ * and generate Sentinel alerts in Firestore if there are significant delays or cancellations.
+ */
+export const monitorFlightsAndCreateAlerts = async () => {
+  console.log('[monitorFlightsAndCreateAlerts] Starting Sentinel cron job...');
+  try {
+    const activeTrips = await Trip.find({ trackingEnabled: true });
+    console.log(`[monitorFlightsAndCreateAlerts] Found ${activeTrips.length} active trips to monitor.`);
+
+    for (const trip of activeTrips) {
+      try {
+        const flightData = await checkFlightStatus(trip.flightNumber, trip.departureDate);
+        if (!flightData) continue;
+
+        const isDelayed = flightData.status === 'delayed' || flightData.status === 'active_delayed' || flightData.delayMinutes > 15;
+        const isCancelled = flightData.status === 'cancelled';
+
+        if (isDelayed || isCancelled) {
+          const priority = isCancelled ? 'CRITICAL' : 'HIGH';
+          const eventType = isCancelled ? 'CANCELLATION' : 'DELAY';
+          const message = isCancelled 
+            ? `Flight ${flightData.flightNumber} (${flightData.airline.name}) has been cancelled.` 
+            : `Flight ${flightData.flightNumber} (${flightData.airline.name}) is delayed by ${flightData.delayMinutes} minutes.`;
+
+          // Ensure we don't spam the same alert. For simplicity, we create a new alert,
+          // but a better approach would be to check if an identical unread alert exists.
+          const existingAlerts = await AlertModel.find({ 
+            userId: trip.userId, 
+            flightCode: flightData.flightNumber, 
+            eventType: eventType 
+          }).sort({ createdAt: -1 }).limit(1);
+
+          let shouldCreate = true;
+          if (existingAlerts.length > 0) {
+            // Check if we already alerted about this specific flight delay today
+            const lastAlert = existingAlerts[0];
+            const hoursSinceLastAlert = (Date.now() - new Date(lastAlert.createdAt).getTime()) / (1000 * 60 * 60);
+            if (hoursSinceLastAlert < 2) {
+               shouldCreate = false; // Debounce alerts
+            }
+          }
+
+          if (shouldCreate) {
+            await AlertModel.create({
+              userId: trip.userId,
+              flightCode: flightData.flightNumber,
+              airline: flightData.airline.name,
+              priority: priority,
+              eventType: eventType,
+              message: message,
+              isRead: false,
+              source: 'Sentinel Cron',
+            });
+            console.log(`[monitorFlightsAndCreateAlerts] Created ${eventType} alert for user ${trip.userId} (Flight: ${flightData.flightNumber})`);
+          }
+        }
+      } catch (err) {
+        console.error(`[monitorFlightsAndCreateAlerts] Failed to process trip ${trip.id}:`, err);
+      }
+    }
+    console.log('[monitorFlightsAndCreateAlerts] Completed Sentinel cron job.');
+  } catch (error) {
+    console.error('[monitorFlightsAndCreateAlerts] Cron job failed:', error);
+  }
 };

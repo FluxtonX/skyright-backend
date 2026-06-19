@@ -1,5 +1,7 @@
 import app from './app';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
+import { monitorFlightsAndCreateAlerts } from './services/flightService';
 
 dotenv.config();
 
@@ -10,6 +12,12 @@ const startServer = async () => {
   try {
     server = app.listen(PORT, () => {
       console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
+      
+      // Initialize Sentinel Cron Job
+      console.log('Initializing Sentinel monitoring cron job (runs every 2 hours)...');
+      cron.schedule('0 */2 * * *', () => {
+        monitorFlightsAndCreateAlerts();
+      });
     });
     server.on('error', (error) => {
       console.error('Server listener error:', error);
