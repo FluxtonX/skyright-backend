@@ -20,6 +20,7 @@ export interface UserProfile {
   onboardingCompleted?: boolean;
   settings?: Record<string, any>;
   alertPreferences?: Record<string, any>;
+  fcmToken?: string;
   lastLoginAt?: Date | null;
   createdAt?: Date | null;
   updatedAt?: Date | null;
@@ -58,6 +59,7 @@ const toProfile = (firebaseId: string, data: FirebaseFirestore.DocumentData): Us
   onboardingCompleted: data.onboardingCompleted === true,
   settings: data.settings || {},
   alertPreferences: data.alertPreferences || {},
+  fcmToken: data.fcmToken,
   lastLoginAt: toDate(data.lastLoginAt),
   createdAt: toDate(data.createdAt),
   updatedAt: toDate(data.updatedAt),

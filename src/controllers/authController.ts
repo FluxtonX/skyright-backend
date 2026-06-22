@@ -143,6 +143,28 @@ export const updateNotificationPreference = async (req: AuthRequest, res: Respon
   res.json(toProfileResponse(updatedUser));
 };
 
+// @desc    Update FCM Device Token
+// @route   POST /api/auth/fcm-token
+// @access  Private
+export const updateFcmToken = async (req: AuthRequest, res: Response) => {
+  const user = requireUser(req, res);
+  if (!user) return;
+
+  const { fcmToken } = req.body;
+
+  if (!fcmToken || typeof fcmToken !== 'string') {
+    return res.status(400).json({ message: 'Valid FCM token is required' });
+  }
+
+  const updatedUser = await updateUserProfileFields(user.firebaseId, { fcmToken: fcmToken.trim() });
+
+  if (!updatedUser) {
+    return res.status(404).json({ message: 'User not found' });
+  }
+
+  res.json({ message: 'FCM token updated successfully', fcmToken: updatedUser.fcmToken });
+};
+
 // @desc    Complete onboarding with role and initial preferences
 // @route   PATCH /api/auth/onboarding
 // @access  Private

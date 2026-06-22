@@ -14,6 +14,7 @@ import {
   updateUserProfile,
   updateUserRole,
   uploadProfilePhoto,
+  updateFcmToken,
 } from '../controllers/authController';
 import { protect } from '../middlewares/authMiddleware';
 import { uploadProfilePhoto as uploadProfilePhotoMiddleware } from '../middlewares/uploadMiddleware';
@@ -22,6 +23,7 @@ import { validateRequest } from '../middlewares/validatorMiddleware';
 const router = express.Router();
 
 router.post('/sync', protect, syncAuthenticatedUser);
+router.post('/fcm-token', protect, updateFcmToken);
 router.get('/onboarding', protect, getOnboardingStatus);
 router.patch(
   '/onboarding',
