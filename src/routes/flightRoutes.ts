@@ -1,5 +1,6 @@
 import express from 'express';
-import { getFlightStatus } from '../controllers/flightController';
+import { getFlightStatus, triggerMockFlightAlert } from '../controllers/flightController';
+import { protect } from '../middlewares/authMiddleware';
 
 const router = express.Router();
 
@@ -18,5 +19,8 @@ const router = express.Router();
  * }
  */
 router.get('/status', getFlightStatus);
+
+// QA Test Endpoint
+router.post('/mock-alert', triggerMockFlightAlert);
 
 export default router;

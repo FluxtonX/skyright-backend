@@ -1,7 +1,9 @@
 import axios from 'axios';
 import dotenv from 'dotenv';
+import admin from '../config/firebase';
 import Trip from '../models/tripModel';
 import AlertModel from '../models/alertModel';
+import { getUserProfileByFirebaseId } from './userProfileService';
 
 dotenv.config();
 
@@ -712,6 +714,28 @@ export const monitorFlightsAndCreateAlerts = async () => {
               source: 'Sentinel Cron',
             });
             console.log(`[monitorFlightsAndCreateAlerts] Created ${eventType} alert for user ${trip.userId} (Flight: ${flightData.flightNumber})`);
+
+            // Send Push Notification via FCM
+            try {
+              const userProfile = await getUserProfileByFirebaseId(trip.userId);
+              if (userProfile && userProfile.fcmToken) {
+                const payload = {
+                  token: userProfile.fcmToken,
+                  notification: {
+                    title: `Flight Alert: ${flightData.flightNumber} ${isCancelled ? 'Cancelled' : 'Delayed'}`,
+                    body: message,
+                  },
+                  data: {
+                    flightNumber: flightData.flightNumber,
+                    eventType: eventType,
+                  },
+                };
+                await admin.messaging().send(payload);
+                console.log(`[monitorFlightsAndCreateAlerts] Sent FCM push notification to user ${trip.userId}`);
+              }
+            } catch (fcmError) {
+              console.error(`[monitorFlightsAndCreateAlerts] Failed to send FCM push notification to user ${trip.userId}:`, fcmError);
+            }
           }
         }
       } catch (err) {
