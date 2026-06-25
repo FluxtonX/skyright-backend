@@ -94,6 +94,10 @@ export const updateUserProfile = async (req: AuthRequest, res: Response) => {
     updates.photoURL = photoURL.trim();
   }
 
+  if (req.body.plan !== undefined) {
+    updates.plan = req.body.plan.trim();
+  }
+
   const updatedUser = await updateUserProfileFields(user.firebaseId, updates);
 
   if (!updatedUser) {
