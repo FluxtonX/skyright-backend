@@ -52,6 +52,51 @@ export interface FlightData {
 const normalizeFlightIata = (flightIata: string) =>
   flightIata.trim().toUpperCase().replace(/\s+/g, '');
 
+const extractBestFlightMatch = (
+  flights: FlightData[],
+  requestedIata: string,
+  requestedDate?: string
+): FlightData | null => {
+  if (!flights || flights.length === 0) return null;
+
+  // Ensure we only look at flights matching the requested IATA
+  const matches = flights.filter(
+    (f) => f.flight?.iata && f.flight.iata.toUpperCase() === requestedIata.toUpperCase()
+  );
+
+  if (matches.length === 0) return null;
+
+  // If we have a requested date, try an exact match first
+  if (requestedDate) {
+    const exactDate = matches.find((f) => f.flight_date === requestedDate);
+    if (exactDate) return exactDate;
+  }
+
+  // If no date or no exact date match, find the most relevant flight
+  // Order of preference: active > scheduled > others
+  const statusPriority: Record<string, number> = {
+    active: 1,
+    active_delayed: 2,
+    scheduled: 3,
+    delayed: 4,
+    incident: 5,
+    diverted: 6,
+    landed: 7,
+    landed_estimated: 8,
+    cancelled: 9,
+  };
+
+  return matches.sort((a, b) => {
+    const pA = statusPriority[a.flight_status?.toLowerCase()] || 99;
+    const pB = statusPriority[b.flight_status?.toLowerCase()] || 99;
+    
+    if (pA !== pB) return pA - pB;
+    
+    // Fallback: newest flight date first
+    return new Date(b.flight_date || 0).getTime() - new Date(a.flight_date || 0).getTime();
+  })[0];
+};
+
 const getFlightErrorMessage = (error: unknown): string => {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
@@ -99,48 +144,10 @@ export const getFlightStatus = async (
       params: {
         access_key: API_KEY,
         flight_iata: normalizedFlightIata,
-        ...(flightDate ? { flight_date: flightDate } : {}),
       },
     });
 
     if (response.data?.error) {
-      if (
-        flightDate &&
-        response.data.error.code === 'function_access_restricted'
-      ) {
-        console.warn(
-          'Aviationstack plan does not allow flight_date filtering. Retrying without flight_date.',
-          { flightIata: normalizedFlightIata, flightDate }
-        );
-
-        const retryResponse = await axios.get(`${AVIATIONSTACK_BASE_URL}/flights`, {
-          timeout: 10000,
-          params: {
-            access_key: API_KEY,
-            flight_iata: normalizedFlightIata,
-          },
-        });
-
-        if (retryResponse.data?.error) {
-          console.error('Aviationstack retry API error:', retryResponse.data.error);
-          throw new Error(
-            retryResponse.data.error.info ||
-              retryResponse.data.error.message ||
-              'Aviationstack API error'
-          );
-        }
-
-        if (
-          retryResponse.data &&
-          retryResponse.data.data &&
-          retryResponse.data.data.length > 0
-        ) {
-          return retryResponse.data.data[0];
-        }
-
-        return null;
-      }
-
       console.error('Aviationstack API error:', response.data.error);
       throw new Error(
         response.data.error.info ||
@@ -149,63 +156,12 @@ export const getFlightStatus = async (
       );
     }
 
-    if (response.data && response.data.data && response.data.data.length > 0) {
-      return response.data.data[0];
+    if (response.data?.data) {
+      return extractBestFlightMatch(response.data.data, normalizedFlightIata, flightDate);
     }
 
     return null;
   } catch (error) {
-    if (
-      flightDate &&
-      axios.isAxiosError(error) &&
-      error.response?.data?.error?.code === 'function_access_restricted'
-    ) {
-      console.warn(
-        'Aviationstack plan does not allow flight_date filtering. Retrying without flight_date.',
-        { flightIata: normalizedFlightIata, flightDate }
-      );
-
-      try {
-        const retryResponse = await axios.get(`${AVIATIONSTACK_BASE_URL}/flights`, {
-          timeout: 10000,
-          params: {
-            access_key: API_KEY,
-            flight_iata: normalizedFlightIata,
-          },
-        });
-
-        if (retryResponse.data?.error) {
-          console.error('Aviationstack retry API error:', retryResponse.data.error);
-          throw new Error(
-            retryResponse.data.error.info ||
-              retryResponse.data.error.message ||
-              'Aviationstack API error'
-          );
-        }
-
-        if (
-          retryResponse.data &&
-          retryResponse.data.data &&
-          retryResponse.data.data.length > 0
-        ) {
-          return retryResponse.data.data[0];
-        }
-
-        return null;
-      } catch (retryError) {
-        const retryMessage = getFlightErrorMessage(retryError);
-        console.error('Error fetching flight status without date filter:', {
-          message: retryMessage,
-          flightIata: normalizedFlightIata,
-          providerBaseUrl: AVIATIONSTACK_BASE_URL,
-          status: axios.isAxiosError(retryError)
-            ? retryError.response?.status
-            : undefined,
-        });
-        throw new Error(retryMessage);
-      }
-    }
-
     const message = getFlightErrorMessage(error);
     console.error('Error fetching flight status:', {
       message,
@@ -308,7 +264,7 @@ export const checkFlightStatus = async (
   if (!API_KEY) {
     console.log('[checkFlightStatus] Mock mode — no API key configured.');
     const mock = getMockFlightData(normalizedFlight, flightDate);
-    return buildFlightStatusResult(normalizedFlight, mock);
+    return buildFlightStatusResult(normalizedFlight, mock, flightDate);
   }
 
   // ── Live Aviationstack call ─────────────────────────────────────────────
@@ -318,27 +274,12 @@ export const checkFlightStatus = async (
       flight_iata: normalizedFlight,
     };
 
-    // Attach flight_date only if the plan supports it; we fall back gracefully
-    if (flightDate) params.flight_date = flightDate;
-
     const response = await axios.get(`${AVIATIONSTACK_BASE_URL}/flights`, {
       timeout: 10000,
       params,
     });
 
-    // Handle Aviationstack-level errors embedded in a 200 response
     if (response.data?.error) {
-      const errCode = response.data.error.code as string | undefined;
-
-      // Free plan doesn't support flight_date — retry without it
-      if (flightDate && errCode === 'function_access_restricted') {
-        console.warn(
-          '[checkFlightStatus] Plan does not support flight_date. Retrying without it.',
-          { flightNumber: normalizedFlight, flightDate }
-        );
-        return checkFlightStatus(normalizedFlight, ''); // retry sans date
-      }
-
       throw new Error(
         response.data.error.info ||
           response.data.error.message ||
@@ -348,27 +289,11 @@ export const checkFlightStatus = async (
 
     const flights: FlightData[] = response.data?.data ?? [];
 
-    if (!flights.length) return null;
+    const match = extractBestFlightMatch(flights, normalizedFlight, flightDate);
+    if (!match) return null;
 
-    // Filter by flight_date when provided (YYYY-MM-DD match)
-    const match = flightDate
-      ? flights.find((f) => f.flight_date === flightDate) ?? flights[0]
-      : flights[0];
-
-    return buildFlightStatusResult(normalizedFlight, match);
+    return buildFlightStatusResult(normalizedFlight, match, flightDate);
   } catch (error) {
-    // Free plan restriction raised as an axios error — retry without date
-    if (
-      flightDate &&
-      axios.isAxiosError(error) &&
-      error.response?.data?.error?.code === 'function_access_restricted'
-    ) {
-      console.warn(
-        '[checkFlightStatus] Caught plan restriction. Retrying without flight_date.',
-        { flightNumber: normalizedFlight, flightDate }
-      );
-      return checkFlightStatus(normalizedFlight, '');
-    }
 
     const message = getFlightErrorMessage(error);
     console.error('[checkFlightStatus] Error:', {
@@ -616,7 +541,8 @@ const resolveFlightStatus = (
 // ── Helper: map a raw FlightData into a clean FlightStatusResult ────────────
 const buildFlightStatusResult = (
   flightNumber: string,
-  data: FlightData
+  data: FlightData,
+  requestedDate?: string
 ): FlightStatusResult => {
   const delayMinutes = data.departure?.delay ?? 0;
 
@@ -630,7 +556,7 @@ const buildFlightStatusResult = (
 
   return {
     flightNumber,
-    flightDate: data.flight_date,
+    flightDate: requestedDate || data.flight_date,
     status: resolvedStatus,
     delayMinutes,
     departure: {
