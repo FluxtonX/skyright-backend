@@ -123,9 +123,13 @@ export const getExpenseMetrics = async (req: AuthRequest, res: Response) => {
 
     const flaggedCount = expenses.filter(e => e.status === 'Flagged').length;
     
-    // Compliant is a mockup percentage for now
+    const nonCompliantCount = expenses.filter(e => 
+      e.status === 'Flagged' || 
+      (e.status !== 'Draft' && !e.receiptUrl && e.amount > 5000)
+    ).length;
+
     const complianceRate = expenses.length > 0 
-      ? Math.round(((expenses.length - flaggedCount) / expenses.length) * 100) 
+      ? Math.round(((expenses.length - nonCompliantCount) / expenses.length) * 100) 
       : 100;
 
     res.json({

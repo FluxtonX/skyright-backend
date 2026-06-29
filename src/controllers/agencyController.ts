@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import User from '../models/userModel';
 import Claim from '../models/claimModel';
+import ADM from '../models/admModel';
 
 // @desc    Get all clients managed by the agency
 // @route   GET /api/agency/clients
@@ -40,10 +41,20 @@ export const getAgencyClientClaims = async (req: AuthRequest, res: Response) => 
 export const resolveADM = async (req: AuthRequest, res: Response) => {
   try {
     const { admNumber, resolutionNotes } = req.body;
-    // Mock resolution logic
+    
+    const adm = await ADM.create({
+      admNumber,
+      resolutionNotes,
+      status: 'In Progress',
+      resolvedBy: req.user._id,
+      tenantId: req.user.tenantId,
+      dateInitiated: new Date().toISOString()
+    });
+
     res.json({ 
       message: `ADM ${admNumber} resolution process initiated`,
-      status: 'In Progress' 
+      status: adm.status,
+      adm
     });
   } catch (error: any) {
     res.status(500).json({ message: error.message });

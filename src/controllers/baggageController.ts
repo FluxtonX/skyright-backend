@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import Baggage from '../models/baggageModel';
+import Claim from '../models/claimModel';
 import { deleteFirebaseStorageFile, uploadBufferToFirebaseStorage } from '../services/storageService';
 
 // @desc    Track a new bag (Scan/Manual)
@@ -211,17 +212,52 @@ export const filePIR = async (req: AuthRequest, res: Response) => {
 export const getBaggageAnalytics = async (req: AuthRequest, res: Response) => {
   try {
     const bags = await Baggage.find({ user: req.user._id });
-    const incidents = bags.filter(b => b.pirFiled).length;
+    const incidents = bags.filter(b => b.pirFiled);
     
+    const claims = await Claim.find({ user: req.user._id });
+    const baggageClaims = claims.filter((c: any) => 
+      c.disruptionType === 'Baggage Loss' || 
+      c.disruptionType === 'Baggage Delay' || 
+      c.disruptionType === 'Damaged Baggage' ||
+      c.type === 'Baggage'
+    );
+    
+    let recovered = 0;
+    let responseDays = 0;
+    let resolvedBaggageClaims = 0;
+    const airlines = new Set<string>();
+
+    baggageClaims.forEach((claim: any) => {
+      airlines.add(claim.airline || 'Unknown');
+      if (claim.status === 'Resolved' || claim.status === 'Closed') {
+         resolvedBaggageClaims++;
+         recovered += (Number(claim.compensationAmount) || 0);
+         if (claim.createdAt && claim.updatedAt) {
+            const diffTime = Math.abs(new Date(claim.updatedAt).getTime() - new Date(claim.createdAt).getTime());
+            responseDays += Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+         }
+      }
+    });
+
+    const avgResponseTime = resolvedBaggageClaims > 0 ? (responseDays / resolvedBaggageClaims).toFixed(1) + ' days' : '0 days';
+    const compensationRecovered = '₦' + (recovered > 0 ? (recovered / 1000).toFixed(0) + 'K' : '0');
+    
+    const airportStats: Record<string, number> = {};
+    incidents.forEach(b => {
+      const airport = b.currentLocation || 'Unknown';
+      airportStats[airport] = (airportStats[airport] || 0) + 1;
+    });
+
+    const airportRankings = Object.keys(airportStats)
+      .map(name => ({ name, incidents: airportStats[name] }))
+      .sort((a, b) => b.incidents - a.incidents);
+
     res.json({
-      totalIncidents: incidents,
-      compensationRecovered: '₦325K', // Mocked until payment integration for claims is fully tied
-      avgResponseTime: '2.8 days',
-      activeAirlines: 12,
-      airportRankings: [
-        { name: 'Murtala Muhammed (LOS)', incidents: 4 },
-        { name: 'Nnamdi Azikiwe (ABV)', incidents: 2 },
-      ]
+      totalIncidents: incidents.length,
+      compensationRecovered,
+      avgResponseTime,
+      activeAirlines: airlines.size,
+      airportRankings
     });
   } catch (error: any) {
     res.status(500).json({ message: error.message });

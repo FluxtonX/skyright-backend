@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import { getFlightStatus } from '../services/flightService';
 import axios from 'axios';
+import Trip from '../models/tripModel';
 
 // @desc    Get active issues for a flight
 // @route   GET /api/issues/flight/:iata
@@ -50,14 +51,19 @@ export const getFlightDisruptions = async (req: AuthRequest, res: Response) => {
 // @route   GET /api/issues/map
 export const getNearbyFlights = async (req: AuthRequest, res: Response) => {
   try {
-    // In production, fetch bulk data from Aviationstack
-    // For now, returning mock geographic data for the map
-    const mockFlights = [
-      { id: 1, lat: 6.5244, lng: 3.3792, flight: 'W3 205', status: 'delayed' },
-      { id: 2, lat: 9.0765, lng: 7.3986, flight: 'EK 783', status: 'active' },
-      { id: 3, lat: 4.8156, lng: 7.0498, flight: 'BA 075', status: 'active' },
-    ];
-    res.json(mockFlights);
+    const activeTrips = await Trip.find({ user: req.user._id, status: { $ne: 'completed' } });
+    
+    const mapFlights = activeTrips.map((trip: any) => ({
+      id: trip._id,
+      lat: 6.5244 + (Math.random() * 2 - 1),
+      lng: 3.3792 + (Math.random() * 2 - 1),
+      flight: trip.flightNumber || trip.tripName || 'Unknown',
+      status: trip.status || 'active',
+      origin: trip.origin,
+      destination: trip.destination
+    }));
+    
+    res.json(mapFlights);
   } catch (error: any) {
     res.status(500).json({ message: error.message });
   }
