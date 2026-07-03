@@ -348,11 +348,22 @@ const LANDED_SCHEDULED_BUFFER_MIN = 20;
  * Returns NaN on any parse failure so callers can guard with isNaN().
  */
 const isoToUtcMs = (iso: string, ianaTimezone?: string): number => {
-  const trimmed = iso.trim();
+  let trimmed = iso.trim();
   if (!trimmed) return NaN;
 
-  // ── (a) offset already present ────────────────────────────────────────────
-  if (/[+-]\d{2}:\d{2}$/.test(trimmed) || trimmed.endsWith('Z')) {
+  // FIX: Aviationstack often returns local time but incorrectly appends +00:00 or Z.
+  // E.g. "2026-07-03T18:00:00+00:00" for 6:00 PM in Asia/Karachi.
+  // If we leave +00:00, Date.parse treats it as UTC, pushing it hours into the future.
+  // We must strip +00:00 or Z so it's treated as a naive local string, which our
+  // IANA timezone inversion logic below will correctly convert to true UTC.
+  if (trimmed.endsWith('+00:00')) {
+    trimmed = trimmed.substring(0, trimmed.length - 6);
+  } else if (trimmed.endsWith('Z')) {
+    trimmed = trimmed.substring(0, trimmed.length - 1);
+  }
+
+  // ── (a) offset already present (and not +00:00 stripped above) ────────────
+  if (/[+-]\d{2}:\d{2}$/.test(trimmed)) {
     return Date.parse(trimmed);
   }
 
@@ -499,6 +510,47 @@ const resolvePrematureActive = (
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// resolveOverdueScheduled
+// ─────────────────────────────────────────────────────────────────────────────
+/**
+ * Determines whether Aviationstack is lagging and a "scheduled" flight 
+ * has actually already passed its departure time.
+ *
+ * Return values:
+ *   "active" — if the status is scheduled/planned but now > departure time + 10 mins.
+ *   null     — otherwise.
+ */
+const resolveOverdueScheduled = (
+  rawStatus: string,
+  departureData: FlightData['departure']
+): string | null => {
+  const status = rawStatus.toLowerCase();
+
+  if (status !== 'scheduled' && status !== 'planned') return null;
+
+  const tz = departureData?.timezone;
+  const estimatedIso = departureData?.estimated?.trim();
+  const scheduledIso = departureData?.scheduled?.trim();
+  const refIso       = estimatedIso || scheduledIso;
+
+  if (!refIso) return null;
+
+  const refUtcMs = isoToUtcMs(refIso, tz);
+  if (isNaN(refUtcMs)) return null;
+
+  // Override to 'active' if current time is > 10 mins past departure
+  if (Date.now() > refUtcMs + 10 * 60_000) {
+    console.log(
+      `[resolveOverdueScheduled] scheduled departure time passed by 10m → "active"`,
+      { refIso, nowUtc: new Date().toISOString() }
+    );
+    return 'active';
+  }
+
+  return null;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // resolveFlightStatus
 // ─────────────────────────────────────────────────────────────────────────────
 /**
@@ -526,6 +578,10 @@ const resolveFlightStatus = (
   // ── Priority 2: premature active check ────────────────────────────────────
   const prematureOverride = resolvePrematureActive(rawStatus, departureData);
   if (prematureOverride) rawStatus = prematureOverride;
+
+  // ── Priority 2.5: overdue scheduled check (Aviationstack lag) ─────────────
+  const overdueOverride = resolveOverdueScheduled(rawStatus, departureData);
+  if (overdueOverride) rawStatus = overdueOverride;
 
   // ── Priority 3: significant departure delay ───────────────────────────────
   const status = rawStatus.toLowerCase();

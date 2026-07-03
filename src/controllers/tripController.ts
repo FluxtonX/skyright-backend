@@ -59,6 +59,7 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
       departureDate,
       bookingReference,
       totalDuration,
+      status,
       stops,
       timeline = [],
     } = req.body;
@@ -97,7 +98,7 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
         providerError: flightLookupError || undefined,
       });
     }
-    const resolvedStatus = flightData?.flight_status || 'planned';
+    const resolvedStatus = status || flightData?.flight_status || 'planned';
     const resolvedTimeline = flightData
       ? [
           {
