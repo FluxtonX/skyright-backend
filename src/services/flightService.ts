@@ -96,15 +96,40 @@ const extractBestFlightMatch = (
     cancelled: 9,
   };
 
-  return matches.sort((a, b) => {
+  const bestMatch = matches.sort((a, b) => {
     const pA = statusPriority[a.flight_status?.toLowerCase()] || 99;
     const pB = statusPriority[b.flight_status?.toLowerCase()] || 99;
-    
-    if (pA !== pB) return pA - pB;
-    
-    // Fallback: newest flight date first
-    return new Date(b.flight_date || 0).getTime() - new Date(a.flight_date || 0).getTime();
+    return pA - pB;
   })[0];
+
+  if (!bestMatch) return null;
+
+  // If the user requested a specific date but AviationStack only had a past/future flight,
+  // we must "shift" the timestamps to the requested date so the UI shows the correct times
+  // and resolveFlightStatus evaluates it as "scheduled" instead of "landed".
+  if (requestedDate && bestMatch.flight_date && bestMatch.flight_date !== requestedDate) {
+    const cloned = JSON.parse(JSON.stringify(bestMatch));
+    const oldDate = cloned.flight_date;
+    
+    // Replace the old date string with the requested date in all timestamp fields
+    if (cloned.departure?.scheduled) cloned.departure.scheduled = cloned.departure.scheduled.replace(oldDate, requestedDate);
+    if (cloned.departure?.estimated) cloned.departure.estimated = cloned.departure.estimated.replace(oldDate, requestedDate);
+    if (cloned.arrival?.scheduled) cloned.arrival.scheduled = cloned.arrival.scheduled.replace(oldDate, requestedDate);
+    if (cloned.arrival?.estimated) cloned.arrival.estimated = cloned.arrival.estimated.replace(oldDate, requestedDate);
+    
+    // Force status to scheduled since it's a template for a different day
+    cloned.flight_date = requestedDate;
+    cloned.flight_status = 'scheduled';
+    
+    // Clear live tracking and actual times since this is a template
+    delete cloned.live;
+    if (cloned.departure?.actual) delete cloned.departure.actual;
+    if (cloned.arrival?.actual) delete cloned.arrival.actual;
+    
+    return cloned;
+  }
+
+  return bestMatch;
 };
 
 const getFlightErrorMessage = (error: unknown): string => {
@@ -307,7 +332,12 @@ export const getLiveFlightPosition = async (
 
     return {
       flightNumber: flightData.flight?.iata || normalizedFlight,
-      status: flightData.flight_status || 'unknown',
+      status: resolveFlightStatus(
+        flightData.flight_status || 'unknown',
+        flightData.departure?.delay ?? 0,
+        flightData.arrival,
+        flightData.departure
+      ),
       latitude: live?.latitude ?? null,
       longitude: live?.longitude ?? null,
       altitude: live ? Math.round(live.altitude * 3.28084) : null, // meters → feet
@@ -432,9 +462,9 @@ const SIGNIFICANT_DELAY_MINUTES = 15;
  *  • estimated → 15 min  gate estimate, updated en-route
  *  • scheduled → 20 min  least accurate — wait longer before overriding
  */
-const LANDED_ACTUAL_BUFFER_MIN    =  5;
-const LANDED_ESTIMATED_BUFFER_MIN = 15;
-const LANDED_SCHEDULED_BUFFER_MIN = 20;
+const LANDED_ACTUAL_BUFFER_MIN    = 0;
+const LANDED_ESTIMATED_BUFFER_MIN = 0;
+const LANDED_SCHEDULED_BUFFER_MIN = 0;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // isoToUtcMs
@@ -499,8 +529,8 @@ const isoToUtcMs = (iso: string, ianaTimezone?: string): number => {
         `T${get('hour')}:${get('minute')}:${get('second')}Z`
       );
 
-      const offsetMs = naiveAsUtcMs - localAtNaiveUtcMs; // e.g. +18_000_000 for UTC+5
-      return naiveAsUtcMs - offsetMs;                     // subtract to undo shift
+      const offsetMs = naiveAsUtcMs - localAtNaiveUtcMs; // e.g. -18_000_000 for UTC+5
+      return naiveAsUtcMs + offsetMs;                     // add to apply shift correctly
     } catch {
       // Malformed IANA string — fall through to (c)
     }
@@ -533,8 +563,8 @@ const resolveEstimatedLanding = (
 ): string | null => {
   const status = rawStatus.toLowerCase();
 
-  // Guard: only override statuses that imply the aircraft is still airborne
-  const airborneStatuses = new Set(['active', 'active_delayed', 'scheduled', 'delayed']);
+  // Guard: only override statuses that imply the aircraft is still airborne or unknown
+  const airborneStatuses = new Set(['active', 'active_delayed', 'scheduled', 'delayed', 'unknown', 'planned']);
   if (!airborneStatuses.has(status)) return null;
 
   const tz = arrivalData?.timezone; // IANA string, e.g. "Asia/Karachi"
@@ -598,8 +628,8 @@ const resolvePrematureActive = (
 ): string | null => {
   const status = rawStatus.toLowerCase();
 
-  // Only consider active statuses
-  if (status !== 'active' && status !== 'active_delayed') return null;
+  // Consider active, unknown, and planned statuses to see if they are premature (i.e. should be scheduled)
+  if (status !== 'active' && status !== 'active_delayed' && status !== 'unknown' && status !== 'planned') return null;
 
   const tz = departureData?.timezone;
   const estimatedIso = departureData?.estimated?.trim();
@@ -639,7 +669,7 @@ const resolveOverdueScheduled = (
 ): string | null => {
   const status = rawStatus.toLowerCase();
 
-  if (status !== 'scheduled' && status !== 'planned') return null;
+  if (status !== 'scheduled' && status !== 'planned' && status !== 'unknown') return null;
 
   const tz = departureData?.timezone;
   const estimatedIso = departureData?.estimated?.trim();
@@ -678,12 +708,12 @@ const resolveOverdueScheduled = (
  *  3   | departure.delay > 15 min + active/scheduled       | "active_delayed" / "delayed"
  *  4   | none of the above                                 | rawStatus unchanged
  */
-const resolveFlightStatus = (
+export function resolveFlightStatus(
   rawStatus: string,
   delayMinutes: number,
   arrivalData: FlightData['arrival'],
   departureData: FlightData['departure']
-): string => {
+): string {
   // ── Priority 1: landing-time check always wins ────────────────────────────
   const landedOverride = resolveEstimatedLanding(rawStatus, arrivalData);
   if (landedOverride) return landedOverride;
@@ -833,6 +863,16 @@ export const monitorFlightsAndCreateAlerts = async () => {
             }
           }
         }
+        
+        // Always update the trip's status in the database based on the latest live data
+        trip.status = flightData.status;
+        trip.lastTrackedAt = new Date().toISOString();
+        if (flightData.status === 'landed' || flightData.status === 'landed_estimated') {
+          trip.trackingEnabled = false; // Stop monitoring once landed
+        }
+        await trip.save();
+        console.log(`[monitorFlightsAndCreateAlerts] Updated trip ${trip.id} status to ${trip.status}`);
+
       } catch (err) {
         console.error(`[monitorFlightsAndCreateAlerts] Failed to process trip ${trip.id}:`, err);
       }

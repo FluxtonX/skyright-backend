@@ -12,8 +12,14 @@ import {
   updateTrip,
 } from '../controllers/tripController';
 import { protect } from '../middlewares/authMiddleware';
+import { monitorFlightsAndCreateAlerts } from '../services/flightService';
 
 const router = express.Router();
+
+router.get('/test-cron', async (req, res) => {
+  await monitorFlightsAndCreateAlerts();
+  res.send('Cron triggered');
+});
 
 router.route('/')
   .post(protect, createTrip)

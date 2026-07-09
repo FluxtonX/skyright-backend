@@ -10,7 +10,7 @@ let server: ReturnType<typeof app.listen> | undefined;
 
 const startServer = async () => {
   try {
-    server = app.listen(PORT, () => {
+    server = app.listen(Number(PORT), '0.0.0.0', () => {
       console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
       
       // Initialize Sentinel Cron Job
