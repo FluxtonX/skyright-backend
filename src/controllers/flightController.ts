@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { checkFlightStatus } from '../services/flightService';
+import { checkFlightStatus, getLiveFlightPosition } from '../services/flightService';
 import { AuthRequest } from '../middlewares/authMiddleware';
 import AlertModel from '../models/alertModel';
 import admin from '../config/firebase';
@@ -135,3 +135,37 @@ export const triggerMockFlightAlert = async (req: AuthRequest, res: Response) =>
   }
 };
 
+/**
+ * @desc  Get real-time live position (lat/lng/speed/altitude) of a flight
+ * @route GET /api/flights/live-position?flightNumber=SV727&flightDate=2026-07-09
+ * @access Public
+ */
+export const getLivePosition = async (req: Request, res: Response) => {
+  try {
+    const flightNumber = ((req.query.flightNumber as string) || '').trim().toUpperCase();
+    const flightDate   = ((req.query.flightDate   as string) || '').trim();
+
+    if (!flightNumber) {
+      return res.status(400).json({
+        message: 'flightNumber query parameter is required (e.g. ?flightNumber=SV727)',
+      });
+    }
+
+    const result = await getLiveFlightPosition(flightNumber, flightDate || undefined);
+
+    if (!result) {
+      return res.status(404).json({
+        message: `No flight data found for ${flightNumber}${flightDate ? ` on ${flightDate}` : ''}.`,
+      });
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    const message: string = error?.message ?? 'Unknown error fetching live position';
+    const isProviderError =
+      message.toLowerCase().includes('aviationstack') ||
+      message.toLowerCase().includes('rejected the request');
+
+    return res.status(isProviderError ? 503 : 500).json({ message });
+  }
+};

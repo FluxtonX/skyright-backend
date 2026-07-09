@@ -47,6 +47,16 @@ export interface FlightData {
     iata: string;
     icao: string;
   };
+  live?: {
+    updated: string;
+    latitude: number;
+    longitude: number;
+    altitude: number;
+    direction: number;
+    speed_horizontal: number;
+    speed_vertical: number;
+    is_ground: boolean;
+  } | null;
 }
 
 const normalizeFlightIata = (flightIata: string) =>
@@ -218,7 +228,110 @@ const getMockFlightData = (flightIata: string, flightDate?: string): FlightData 
       iata: flightIata,
       icao: flightIata,
     },
+    live: {
+      updated: new Date().toISOString(),
+      latitude: 29.8, // Midpoint between KHI and LHE
+      longitude: 70.5,
+      altitude: 10972, // ~36,000 ft in meters
+      direction: 45.0,
+      speed_horizontal: 853,
+      speed_vertical: 0,
+      is_ground: false,
+    },
   };
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// getLiveFlightPosition — real-time aircraft position for the Live Tracker map
+// Returns lat/lng/altitude/speed when airborne, or null fields when on ground
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface LiveFlightPosition {
+  flightNumber: string;
+  status: string;
+  latitude: number | null;
+  longitude: number | null;
+  altitude: number | null;
+  speed: number | null;
+  direction: number | null;
+  isGround: boolean;
+  updated: string | null;
+  origin: string;
+  destination: string;
+  originAirport: string;
+  destinationAirport: string;
+  departureTime: string;
+  arrivalTime: string;
+  airline: string;
+}
+
+export const getLiveFlightPosition = async (
+  flightNumber: string,
+  flightDate?: string
+): Promise<LiveFlightPosition | null> => {
+  const normalizedFlight = normalizeFlightIata(flightNumber);
+
+  try {
+    let flightData: FlightData | null;
+
+    if (!API_KEY) {
+      console.log('[getLiveFlightPosition] Mock mode — no API key.');
+      flightData = getMockFlightData(normalizedFlight, flightDate);
+    } else {
+      const response = await axios.get(`${AVIATIONSTACK_BASE_URL}/flights`, {
+        timeout: 10000,
+        params: {
+          access_key: API_KEY,
+          flight_iata: normalizedFlight,
+        },
+      });
+
+      if (response.data?.error) {
+        throw new Error(
+          response.data.error.info ||
+            response.data.error.message ||
+            'Aviationstack API error'
+        );
+      }
+
+      flightData = extractBestFlightMatch(
+        response.data?.data ?? [],
+        normalizedFlight,
+        flightDate
+      );
+    }
+
+    if (!flightData) return null;
+
+    const live = flightData.live;
+
+    return {
+      flightNumber: flightData.flight?.iata || normalizedFlight,
+      status: flightData.flight_status || 'unknown',
+      latitude: live?.latitude ?? null,
+      longitude: live?.longitude ?? null,
+      altitude: live ? Math.round(live.altitude * 3.28084) : null, // meters → feet
+      speed: live ? Math.round(live.speed_horizontal) : null,
+      direction: live?.direction ?? null,
+      isGround: live?.is_ground ?? true,
+      updated: live?.updated ?? null,
+      origin: flightData.departure?.iata || '',
+      destination: flightData.arrival?.iata || '',
+      originAirport: flightData.departure?.airport || '',
+      destinationAirport: flightData.arrival?.airport || '',
+      departureTime: flightData.departure?.scheduled || '',
+      arrivalTime: flightData.arrival?.scheduled || '',
+      airline: flightData.airline?.name || '',
+    };
+  } catch (error) {
+    const message = getFlightErrorMessage(error);
+    console.error('[getLiveFlightPosition] Error:', {
+      message,
+      flightNumber: normalizedFlight,
+      flightDate,
+    });
+    throw new Error(message);
+  }
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

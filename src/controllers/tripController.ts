@@ -161,7 +161,7 @@ export const createTrip = async (req: AuthRequest, res: Response) => {
       destination: resolvedDestination,
       departureDate: flightData?.flight_date || resolvedDepartureDate,
       bookingReference: bookingReference?.trim() || null,
-      totalDuration: totalDuration || resolvedDepartureDate,
+      totalDuration: totalDuration || null,
       stops: stops || 0,
       timeline: processedTimeline,
       status: resolvedStatus,
