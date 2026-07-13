@@ -367,17 +367,33 @@ export interface FlightStatusResult {
   };
 }
 
+interface CacheEntry {
+  data: FlightStatusResult | null;
+  timestamp: number;
+}
+const flightCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 mins
+
 export const checkFlightStatus = async (
   flightNumber: string,
   flightDate: string
 ): Promise<FlightStatusResult | null> => {
   const normalizedFlight = normalizeFlightIata(flightNumber);
+  const cacheKey = `${normalizedFlight}_${flightDate}`;
+
+  const cached = flightCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    console.log(`[checkFlightStatus] Returning cached data for ${cacheKey}`);
+    return cached.data;
+  }
 
   // ── Mock mode (no API key) ──────────────────────────────────────────────
   if (!API_KEY) {
     console.log('[checkFlightStatus] Mock mode — no API key configured.');
     const mock = getMockFlightData(normalizedFlight, flightDate);
-    return buildFlightStatusResult(normalizedFlight, mock, flightDate);
+    const result = buildFlightStatusResult(normalizedFlight, mock, flightDate);
+    flightCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
   }
 
   // ── Live Aviationstack call ─────────────────────────────────────────────
@@ -403,9 +419,14 @@ export const checkFlightStatus = async (
     const flights: FlightData[] = response.data?.data ?? [];
 
     const match = extractBestFlightMatch(flights, normalizedFlight, flightDate);
-    if (!match) return null;
+    if (!match) {
+      flightCache.set(cacheKey, { data: null, timestamp: Date.now() });
+      return null;
+    }
 
-    return buildFlightStatusResult(normalizedFlight, match, flightDate);
+    const result = buildFlightStatusResult(normalizedFlight, match, flightDate);
+    flightCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
   } catch (error) {
 
     const message = getFlightErrorMessage(error);
@@ -764,10 +785,62 @@ export const monitorFlightsAndCreateAlerts = async () => {
     const activeTrips = await Trip.find({ trackingEnabled: true });
     console.log(`[monitorFlightsAndCreateAlerts] Found ${activeTrips.length} active trips to monitor.`);
 
+    // 1. Group by flight (Deduplication)
+    const tripsByFlight = new Map<string, typeof activeTrips>();
     for (const trip of activeTrips) {
+      const key = `${trip.flightNumber}_${trip.departureDate}`;
+      if (!tripsByFlight.has(key)) tripsByFlight.set(key, []);
+      tripsByFlight.get(key)!.push(trip);
+    }
+
+    const now = Date.now();
+
+    for (const [key, tripsGroup] of tripsByFlight.entries()) {
       try {
-        const flightData = await checkFlightStatus(trip.flightNumber, trip.departureDate);
+        const representativeTrip = tripsGroup[0];
+
+        // 2. Smart Polling
+        const flightUtcMs = isoToUtcMs(representativeTrip.departureDate);
+        const msUntilFlight = isNaN(flightUtcMs) ? 0 : flightUtcMs - now;
+        const hoursUntilFlight = msUntilFlight / (1000 * 60 * 60);
+
+        let lastTrackedMs = 0;
+        for (const t of tripsGroup) {
+           if (t.lastTrackedAt) {
+              const ms = new Date(t.lastTrackedAt).getTime();
+              if (!isNaN(ms) && ms > lastTrackedMs) lastTrackedMs = ms;
+           }
+        }
+        const hoursSinceLastTracked = (now - lastTrackedMs) / (1000 * 60 * 60);
+
+        if (hoursUntilFlight > 48 && hoursSinceLastTracked < 24) {
+          console.log(`[monitorFlightsAndCreateAlerts] Skipping ${key} (Flight > 48h away, polled < 24h ago)`);
+          continue;
+        }
+        if (hoursUntilFlight > 24 && hoursUntilFlight <= 48 && hoursSinceLastTracked < 6) {
+          console.log(`[monitorFlightsAndCreateAlerts] Skipping ${key} (Flight 24-48h away, polled < 6h ago)`);
+          continue;
+        }
+
+        const flightData = await checkFlightStatus(representativeTrip.flightNumber, representativeTrip.departureDate);
+        
+        // Update lastTrackedAt
+        for (const trip of tripsGroup) {
+           trip.lastTrackedAt = new Date().toISOString();
+           await trip.save();
+        }
+
         if (!flightData) continue;
+
+        // 3. Auto-Disable Tracking for landed/cancelled flights
+        if (flightData.status === 'landed' || flightData.status === 'cancelled') {
+           console.log(`[monitorFlightsAndCreateAlerts] Flight ${key} is ${flightData.status}. Disabling tracking.`);
+           for (const trip of tripsGroup) {
+              trip.trackingEnabled = false;
+              trip.status = flightData.status;
+              await trip.save();
+           }
+        }
 
         const isDelayed = flightData.status === 'delayed' || flightData.status === 'active_delayed' || flightData.delayMinutes > 15;
         const isCancelled = flightData.status === 'cancelled';
@@ -779,62 +852,60 @@ export const monitorFlightsAndCreateAlerts = async () => {
             ? `Flight ${flightData.flightNumber} (${flightData.airline.name}) has been cancelled.` 
             : `Flight ${flightData.flightNumber} (${flightData.airline.name}) is delayed by ${flightData.delayMinutes} minutes.`;
 
-          // Ensure we don't spam the same alert. For simplicity, we create a new alert,
-          // but a better approach would be to check if an identical unread alert exists.
-          const existingAlerts = await AlertModel.find({ 
-            userId: trip.userId, 
-            flightCode: flightData.flightNumber, 
-            eventType: eventType 
-          }).sort({ createdAt: -1 }).limit(1);
+          for (const trip of tripsGroup) {
+            const existingAlerts = await AlertModel.find({ 
+              userId: trip.userId, 
+              flightCode: flightData.flightNumber, 
+              eventType: eventType 
+            }).sort({ createdAt: -1 }).limit(1);
 
-          let shouldCreate = true;
-          if (existingAlerts.length > 0) {
-            // Check if we already alerted about this specific flight delay today
-            const lastAlert = existingAlerts[0];
-            const hoursSinceLastAlert = (Date.now() - new Date(lastAlert.createdAt).getTime()) / (1000 * 60 * 60);
-            if (hoursSinceLastAlert < 2) {
-               shouldCreate = false; // Debounce alerts
-            }
-          }
-
-          if (shouldCreate) {
-            await AlertModel.create({
-              userId: trip.userId,
-              flightCode: flightData.flightNumber,
-              airline: flightData.airline.name,
-              priority: priority,
-              eventType: eventType,
-              message: message,
-              isRead: false,
-              source: 'Sentinel Cron',
-            });
-            console.log(`[monitorFlightsAndCreateAlerts] Created ${eventType} alert for user ${trip.userId} (Flight: ${flightData.flightNumber})`);
-
-            // Send Push Notification via FCM
-            try {
-              const userProfile = await getUserProfileByFirebaseId(trip.userId);
-              if (userProfile && userProfile.fcmToken) {
-                const payload = {
-                  token: userProfile.fcmToken,
-                  notification: {
-                    title: `Flight Alert: ${flightData.flightNumber} ${isCancelled ? 'Cancelled' : 'Delayed'}`,
-                    body: message,
-                  },
-                  data: {
-                    flightNumber: flightData.flightNumber,
-                    eventType: eventType,
-                  },
-                };
-                await admin.messaging().send(payload);
-                console.log(`[monitorFlightsAndCreateAlerts] Sent FCM push notification to user ${trip.userId}`);
+            let shouldCreate = true;
+            if (existingAlerts.length > 0) {
+              const lastAlert = existingAlerts[0];
+              const hoursSinceLastAlert = (now - new Date(lastAlert.createdAt).getTime()) / (1000 * 60 * 60);
+              if (hoursSinceLastAlert < 2) {
+                 shouldCreate = false; // Debounce alerts
               }
-            } catch (fcmError) {
-              console.error(`[monitorFlightsAndCreateAlerts] Failed to send FCM push notification to user ${trip.userId}:`, fcmError);
+            }
+
+            if (shouldCreate) {
+              await AlertModel.create({
+                userId: trip.userId,
+                flightCode: flightData.flightNumber,
+                airline: flightData.airline.name,
+                priority: priority,
+                eventType: eventType,
+                message: message,
+                isRead: false,
+                source: 'Sentinel Cron',
+              });
+              console.log(`[monitorFlightsAndCreateAlerts] Created ${eventType} alert for user ${trip.userId} (Flight: ${flightData.flightNumber})`);
+
+              try {
+                const userProfile = await getUserProfileByFirebaseId(trip.userId);
+                if (userProfile && userProfile.fcmToken) {
+                  const payload = {
+                    token: userProfile.fcmToken,
+                    notification: {
+                      title: `Flight Alert: ${flightData.flightNumber} ${isCancelled ? 'Cancelled' : 'Delayed'}`,
+                      body: message,
+                    },
+                    data: {
+                      flightNumber: flightData.flightNumber,
+                      eventType: eventType,
+                    },
+                  };
+                  await admin.messaging().send(payload);
+                  console.log(`[monitorFlightsAndCreateAlerts] Sent FCM push notification to user ${trip.userId}`);
+                }
+              } catch (fcmError) {
+                console.error(`[monitorFlightsAndCreateAlerts] Failed to send FCM push notification to user ${trip.userId}:`, fcmError);
+              }
             }
           }
         }
       } catch (err) {
-        console.error(`[monitorFlightsAndCreateAlerts] Failed to process trip ${trip.id}:`, err);
+        console.error(`[monitorFlightsAndCreateAlerts] Failed to process flight group ${key}:`, err);
       }
     }
     console.log('[monitorFlightsAndCreateAlerts] Completed Sentinel cron job.');
